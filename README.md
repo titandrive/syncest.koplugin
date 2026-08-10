@@ -154,6 +154,11 @@ Manual stats pushes and pulls reconcile the complete statistics history. Automat
 
 ## Changelog
 
+### 1.2.6
+
+- Acknowledge automatic chapter progress as soon as the latest reading position is durable, without waiting for progress-history bookkeeping.
+- Keep manual progress checkpoints strict: their success notification still waits until both current progress and history are saved.
+
 ### 1.2.5
 
 - Preserve cloud-only book titles across page changes and delayed Zen UI refreshes by rendering from title-named, hash-isolated thumbnails instead of exposing hash-named cover files.

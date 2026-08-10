@@ -565,7 +565,9 @@ function Syncest:_backgroundPushProgress(payload, notify)
     local DataStorage = require("datastorage")
     local result_file = DataStorage:getSettingsDir()
         .. "/syncest_progress_push_" .. tostring(os.time()) .. ".result"
+    local committed_file = result_file .. ".committed"
     os.remove(result_file)
+    os.remove(committed_file)
 
     logger.info("Syncest background progress push: launching")
     local launch_ok, pid_or_err = pcall(FFIUtil.runInSubProcess, function()
@@ -574,10 +576,15 @@ function Syncest:_backgroundPushProgress(payload, notify)
             local client = Client:new{ server = server }
             local done_success = false
             local done_message = nil
-            client:pushChanges(payload, function(success2, _response, status)
-                done_success = success2 == true
-                done_message = tostring(status or "")
-            end)
+            client:pushChanges(
+                payload,
+                function(success2, _response, status)
+                    done_success = success2 == true
+                    done_message = tostring(status or "")
+                end,
+                notify == "chapter" and function()
+                    write_background_result(committed_file, true, "committed")
+                end or nil)
             return done_success, done_message
         end, debug.traceback)
         if not ok then
@@ -590,6 +597,7 @@ function Syncest:_backgroundPushProgress(payload, notify)
         logger.warn("Syncest background progress push: launch failed "
             .. tostring(pid_or_err))
         os.remove(result_file)
+        os.remove(committed_file)
         self:_notifyProgressPushResult(notify, false)
         return false
     end
@@ -598,9 +606,17 @@ function Syncest:_backgroundPushProgress(payload, notify)
     self._auto_push_progress_running = true
     self._auto_push_progress_pid = pid
     local polls = 0
+    local committed_notified = false
     local poll
     poll = function()
         polls = polls + 1
+        if not committed_notified and notify == "chapter"
+                and peek_background_json_result(committed_file) then
+            committed_notified = true
+            os.remove(committed_file)
+            self:_markProgressPayloadPushed(payload)
+            self:_notifyProgressPushResult(notify, true)
+        end
         if not FFIUtil.isSubProcessDone(pid) then
             if polls < AUTO_SYNC_MAX_POLLS then
                 UIManager:scheduleIn(AUTO_SYNC_POLL_INTERVAL, poll)
@@ -611,12 +627,16 @@ function Syncest:_backgroundPushProgress(payload, notify)
             self._auto_push_progress_running = false
             self._auto_push_progress_pid = nil
             os.remove(result_file)
-            self:_notifyProgressPushResult(notify, false)
+            os.remove(committed_file)
+            if not committed_notified then
+                self:_notifyProgressPushResult(notify, false)
+            end
             return
         end
 
         self._auto_push_progress_running = false
         self._auto_push_progress_pid = nil
+        os.remove(committed_file)
         local success, message = read_background_result(result_file)
         if success then
             logger.info("Syncest background progress push: success")
@@ -624,12 +644,19 @@ function Syncest:_backgroundPushProgress(payload, notify)
             if payload and payload.configs and payload.configs[1] then
                 self:_queueSyncMarker(payload.configs[1])
             end
-            self:_markProgressPayloadPushed(payload)
-            self:_notifyProgressPushResult(notify, true)
+            if not committed_notified then
+                self:_markProgressPayloadPushed(payload)
+                self:_notifyProgressPushResult(notify, true)
+            end
         else
             logger.warn("Syncest background progress push: failed "
                 .. tostring(message))
-            self:_notifyProgressPushResult(notify, false)
+            -- Once progress.json is committed, a later history-bookkeeping
+            -- failure must not turn the chapter acknowledgement into a
+            -- contradictory failure notification.
+            if not committed_notified then
+                self:_notifyProgressPushResult(notify, false)
+            end
         end
         local pending = self._pending_auto_push_progress
         if pending then
