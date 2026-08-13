@@ -847,7 +847,7 @@ function WebDavSyncClient:updateProgressHistoryDeviceName(
     return self:_writeJSON(device_path, remote)
 end
 
-function WebDavSyncClient:pushChanges(changes, callback)
+function WebDavSyncClient:pushChanges(changes, callback, progress_committed_callback)
     logger.info("WebDavSyncClient pushChanges: configs="
         .. tostring(changes.configs and #changes.configs or 0)
         .. " notes=" .. tostring(changes.notes and #changes.notes or 0)
@@ -870,8 +870,10 @@ function WebDavSyncClient:pushChanges(changes, callback)
                 progress_body.readingStatusUpdatedAt = changes.readingStatusUpdatedAt
             end
             local progress_path = "sync/" .. book_hash .. "/progress.json"
+            local progress_committed = false
             if self:_writeJSON(progress_path,
                     progress_body, PROGRESS_PUSH_TIMEOUT) then
+                progress_committed = true
                 -- Keep the critical progress push path to one PUT. Sync markers
                 -- are human-readable metadata and can be refreshed by library/book
                 -- sync; on slow mobile links the extra marker probe can make a
@@ -882,10 +884,19 @@ function WebDavSyncClient:pushChanges(changes, callback)
                     if not self:_writeJSON(progress_path,
                             progress_body, PROGRESS_PUSH_TIMEOUT) then
                         ok = false
+                    else
+                        progress_committed = true
                     end
                 else
                     ok = false
                 end
+            end
+            -- Automatic chapter pushes can acknowledge the critical latest
+            -- position now. Progress-history is recovery bookkeeping and may
+            -- take additional WebDAV round trips. Manual checkpoints continue
+            -- to wait for both writes before their final callback.
+            if progress_committed and progress_committed_callback then
+                progress_committed_callback()
             end
             if ok and changes.progressHistory then
                 local history_ok = self:_appendProgressHistory(
