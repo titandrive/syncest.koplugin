@@ -11,10 +11,7 @@ local EXTS = require("syncest_lib.exts")
 -- the OS-level TCP connect + transfer time and prevents ANR crashes when
 -- the WebDAV server is unreachable (e.g. VPN is off).
 local SYNC_TIMEOUT = 3
--- A dormant Tailscale route can take more than two seconds to wake even on
--- excellent Wi-Fi. Give the first PUT enough time to complete so it does not
--- fall into the much slower generic retry/backoff path.
-local PROGRESS_PUSH_TIMEOUT = 5
+local PROGRESS_PUSH_TIMEOUT = 2
 local PROGRESS_PULL_TIMEOUT = 2
 local SYNC_TOTAL_TIMEOUT = socketutil.FILE_TOTAL_TIMEOUT or 60
 local SYNC_RETRIES = 2
