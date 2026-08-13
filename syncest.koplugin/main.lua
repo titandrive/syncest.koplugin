@@ -611,9 +611,8 @@ function Syncest:_backgroundPushProgress(payload, notify)
     poll = function()
         polls = polls + 1
         if not committed_notified and notify == "chapter"
-                and peek_background_json_result(committed_file) then
+                and read_background_result(committed_file) then
             committed_notified = true
-            os.remove(committed_file)
             self:_markProgressPayloadPushed(payload)
             self:_notifyProgressPushResult(notify, true)
         end
