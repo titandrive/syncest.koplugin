@@ -535,6 +535,49 @@ function Syncest:_notifyProgressPushResult(notify, success, unchanged)
     end
 end
 
+function Syncest:_backgroundAppendProgressHistory(book_hash, history)
+    if not book_hash or type(history) ~= "table" then return false end
+    if self._progress_history_append_running then
+        self._pending_progress_history_append = {
+            book_hash = book_hash,
+            history = history,
+        }
+        return false
+    end
+    local server = self.settings and self.settings.sync_server
+    if type(server) ~= "table" then return false end
+    self._progress_history_append_running = true
+    return self:_runBackgroundJSON(
+        "background progress history append",
+        "syncest_progress_history_append",
+        function()
+            local Client = require("webdav_syncclient")
+            local client = Client:new{ server = server }
+            local success = client:_appendProgressHistory(book_hash, history)
+            return { success = success == true }
+        end,
+        function()
+            self._progress_history_append_running = false
+            local pending = self._pending_progress_history_append
+            self._pending_progress_history_append = nil
+            if pending then
+                self:_backgroundAppendProgressHistory(
+                    pending.book_hash, pending.history)
+            end
+        end,
+        function(message)
+            logger.warn("Syncest background progress history append failed: "
+                .. tostring(message))
+            self._progress_history_append_running = false
+            local pending = self._pending_progress_history_append
+            self._pending_progress_history_append = nil
+            if pending then
+                self:_backgroundAppendProgressHistory(
+                    pending.book_hash, pending.history)
+            end
+        end)
+end
+
 function Syncest:_backgroundPushProgress(payload, notify)
     local config = payload and payload.configs and payload.configs[1]
     local book_hash = config and config.bookHash
@@ -565,9 +608,17 @@ function Syncest:_backgroundPushProgress(payload, notify)
     local DataStorage = require("datastorage")
     local result_file = DataStorage:getSettingsDir()
         .. "/syncest_progress_push_" .. tostring(os.time()) .. ".result"
-    local committed_file = result_file .. ".committed"
     os.remove(result_file)
-    os.remove(committed_file)
+
+    local deferred_history
+    local push_payload = payload
+    if notify == "chapter" and payload.progressHistory then
+        deferred_history = payload.progressHistory
+        push_payload = {}
+        for key, value in pairs(payload) do
+            if key ~= "progressHistory" then push_payload[key] = value end
+        end
+    end
 
     logger.info("Syncest background progress push: launching")
     local launch_ok, pid_or_err = pcall(FFIUtil.runInSubProcess, function()
@@ -576,15 +627,10 @@ function Syncest:_backgroundPushProgress(payload, notify)
             local client = Client:new{ server = server }
             local done_success = false
             local done_message = nil
-            client:pushChanges(
-                payload,
-                function(success2, _response, status)
-                    done_success = success2 == true
-                    done_message = tostring(status or "")
-                end,
-                notify == "chapter" and function()
-                    write_background_result(committed_file, true, "committed")
-                end or nil)
+            client:pushChanges(push_payload, function(success2, _response, status)
+                done_success = success2 == true
+                done_message = tostring(status or "")
+            end)
             return done_success, done_message
         end, debug.traceback)
         if not ok then
@@ -597,7 +643,6 @@ function Syncest:_backgroundPushProgress(payload, notify)
         logger.warn("Syncest background progress push: launch failed "
             .. tostring(pid_or_err))
         os.remove(result_file)
-        os.remove(committed_file)
         self:_notifyProgressPushResult(notify, false)
         return false
     end
@@ -606,16 +651,9 @@ function Syncest:_backgroundPushProgress(payload, notify)
     self._auto_push_progress_running = true
     self._auto_push_progress_pid = pid
     local polls = 0
-    local committed_notified = false
     local poll
     poll = function()
         polls = polls + 1
-        if not committed_notified and notify == "chapter"
-                and read_background_result(committed_file) then
-            committed_notified = true
-            self:_markProgressPayloadPushed(payload)
-            self:_notifyProgressPushResult(notify, true)
-        end
         if not FFIUtil.isSubProcessDone(pid) then
             if polls < AUTO_SYNC_MAX_POLLS then
                 UIManager:scheduleIn(AUTO_SYNC_POLL_INTERVAL, poll)
@@ -626,16 +664,12 @@ function Syncest:_backgroundPushProgress(payload, notify)
             self._auto_push_progress_running = false
             self._auto_push_progress_pid = nil
             os.remove(result_file)
-            os.remove(committed_file)
-            if not committed_notified then
-                self:_notifyProgressPushResult(notify, false)
-            end
+            self:_notifyProgressPushResult(notify, false)
             return
         end
 
         self._auto_push_progress_running = false
         self._auto_push_progress_pid = nil
-        os.remove(committed_file)
         local success, message = read_background_result(result_file)
         if success then
             logger.info("Syncest background progress push: success")
@@ -643,19 +677,16 @@ function Syncest:_backgroundPushProgress(payload, notify)
             if payload and payload.configs and payload.configs[1] then
                 self:_queueSyncMarker(payload.configs[1])
             end
-            if not committed_notified then
-                self:_markProgressPayloadPushed(payload)
-                self:_notifyProgressPushResult(notify, true)
+            self:_markProgressPayloadPushed(payload)
+            self:_notifyProgressPushResult(notify, true)
+            if deferred_history then
+                self:_backgroundAppendProgressHistory(
+                    book_hash, deferred_history)
             end
         else
             logger.warn("Syncest background progress push: failed "
                 .. tostring(message))
-            -- Once progress.json is committed, a later history-bookkeeping
-            -- failure must not turn the chapter acknowledgement into a
-            -- contradictory failure notification.
-            if not committed_notified then
-                self:_notifyProgressPushResult(notify, false)
-            end
+            self:_notifyProgressPushResult(notify, false)
         end
         local pending = self._pending_auto_push_progress
         if pending then
