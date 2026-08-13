@@ -154,6 +154,12 @@ Manual stats pushes and pulls reconcile the complete statistics history. Automat
 
 ## Changelog
 
+### 1.2.7
+
+- Push chapter-completion progress immediately instead of holding it behind the automatic page-turn cooldown.
+- Keep chapter and manual progress pushes on the same complete progress-and-history operation.
+- Refresh filename-derived catalog titles and authors from embedded EPUB/PDF metadata during bulk library pushes.
+
 ### 1.2.6
 
 - Acknowledge automatic chapter progress as soon as the latest reading position is durable, without waiting for progress-history bookkeeping.
