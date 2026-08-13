@@ -29,3 +29,38 @@ describe("cloud book inventory", function()
         assert.is_true(state.cover)
     end)
 end)
+
+describe("embedded catalog metadata", function()
+    it("refreshes a filename-derived title", function()
+        assert.is_true(syncbooks._metadata_needs_refresh({
+            title = "Author - Real Title",
+            author = "Author",
+            metadata_json = '{"title":"Author - Real Title"}',
+        }, {
+            title = "Real Title",
+            authors = "Author",
+        }))
+    end)
+
+    it("does not rewrite matching complete metadata", function()
+        assert.is_false(syncbooks._metadata_needs_refresh({
+            title = "Real Title",
+            author = "Author",
+            metadata_json = '{"title":"Real Title"}',
+        }, {
+            title = "Real Title",
+            authors = "Author",
+        }))
+    end)
+
+    it("refreshes missing metadata even when names match", function()
+        assert.is_true(syncbooks._metadata_needs_refresh({
+            title = "Real Title",
+            author = "Author",
+            metadata_json = "{}",
+        }, {
+            title = "Real Title",
+            authors = "Author",
+        }))
+    end)
+end)

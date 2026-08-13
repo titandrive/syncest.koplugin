@@ -277,10 +277,24 @@ local function row_to_wire(row)
 end
 M._row_to_wire = row_to_wire
 
--- Fill missing/fallback catalog metadata from the book itself before a bulk
--- push publishes library.json. Local scanning normally reads KOReader
--- sidecars, but older or unopened books may have no doc_props even though the
--- EPUB/PDF contains a real title and author.
+local function metadata_needs_refresh(row, props)
+    if type(row) ~= "table" or type(props) ~= "table" then return false end
+    local metadata_missing = not row.metadata_json
+        or row.metadata_json == "" or row.metadata_json == "{}"
+    local embedded_title = props.title
+    local embedded_author = props.authors
+    return metadata_missing
+        or (embedded_title and embedded_title ~= ""
+            and embedded_title ~= row.title)
+        or (embedded_author and embedded_author ~= ""
+            and embedded_author ~= row.author)
+end
+M._metadata_needs_refresh = metadata_needs_refresh
+
+-- Refresh catalog metadata from the book itself before a bulk push publishes
+-- library.json.  Embedded metadata is authoritative: a KOReader sidecar may
+-- contain a filename-derived title (for example "Author - Title") and still
+-- look complete enough that a missing-field-only check would preserve it.
 function M.enrichLocalMetadata(store)
     if not store then return 0 end
     local lfs = require("libs/libkoreader-lfs")
@@ -291,11 +305,7 @@ function M.enrichLocalMetadata(store)
     local updated = 0
 
     for _, row in ipairs(store:listLocalBooks() or {}) do
-        local metadata_missing = not row.metadata_json
-            or row.metadata_json == "" or row.metadata_json == "{}"
-        local author_missing = not row.author or row.author == ""
         if row.local_present == 1 and row.file_path
-                and (metadata_missing or author_missing)
                 and lfs.attributes(row.file_path, "mode") == "file"
                 and DocumentRegistry:hasProvider(row.file_path) then
             local ok_doc, doc = pcall(
@@ -314,15 +324,23 @@ function M.enrichLocalMetadata(store)
                 end
                 pcall(doc.close, doc)
                 if props and (props.title or props.authors) then
-                    local ok_json, encoded = pcall(json.encode, props)
-                    store:upsertBook({
-                        hash = row.hash,
-                        title = props.title or row.title,
-                        author = props.authors or row.author,
-                        metadata_json = ok_json and encoded or row.metadata_json,
-                        updated_at = math.floor(os.time() * 1000),
-                    })
-                    updated = updated + 1
+                    local embedded_title = props.title
+                    local embedded_author = props.authors
+                    local changed = metadata_needs_refresh(row, props)
+                    if changed then
+                        local ok_json, encoded = pcall(json.encode, props)
+                        store:upsertBook({
+                            hash = row.hash,
+                            title = embedded_title ~= "" and embedded_title
+                                or row.title,
+                            author = embedded_author ~= "" and embedded_author
+                                or row.author,
+                            metadata_json = ok_json and encoded
+                                or row.metadata_json,
+                            updated_at = math.floor(os.time() * 1000),
+                        })
+                        updated = updated + 1
+                    end
                 end
             end
         end
