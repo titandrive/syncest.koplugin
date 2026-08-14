@@ -2601,7 +2601,7 @@ function Syncest:addToMainMenu(menu_items)
                             text = _("Configure WebDAV"),
                             callback_func = function()
                                 return function(menu)
-                                    WebDavAuth:setup(self.settings, menu)
+                                    WebDavAuth:setup(self.settings, menu, self.ui)
                                 end
                             end,
                         },

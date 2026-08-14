@@ -1,7 +1,6 @@
 local ButtonDialog = require("ui/widget/buttondialog")
 local InfoMessage  = require("ui/widget/infomessage")
 local UIManager    = require("ui/uimanager")
-local SyncService  = require("apps/cloudstorage/syncservice")
 local T            = require("ffi/util").template
 local _            = require("gettext")
 
@@ -23,24 +22,49 @@ function WebDavAuth:getClient(settings)
     return WebDavSyncClient:new{ server = settings.sync_server }
 end
 
-function WebDavAuth:setup(settings, touchmenu_instance)
+function WebDavAuth:setup(settings, touchmenu_instance, ui)
     local server = settings.sync_server
 
+    -- KOReader 2026.07 replaced SyncService with the Cloud storage plugin.
+    -- Prefer its public picker API, but retain compatibility with older builds.
+    local cloud_storage = ui and ui.cloudstorage
+    local SyncService
+    if not cloud_storage then
+        local ok, service = pcall(require, "apps/cloudstorage/syncservice")
+        if ok then
+            SyncService = service
+        end
+    end
+
+    local function save_server(sv)
+        settings.sync_server = sv
+        settings.user_id   = self:getUserId(settings)
+        settings.user_name = sv.name or sv.username
+        G_reader_settings:saveSetting("webdav_sync", settings)
+        if touchmenu_instance then touchmenu_instance:updateItems() end
+        UIManager:show(InfoMessage:new{
+            text = _("Syncest configured: ") .. (sv.name or sv.address),
+            timeout = 2,
+        })
+    end
+
     local function open_picker()
+        if cloud_storage then
+            cloud_storage:onShowCloudStorageList(save_server)
+            return
+        end
+        if not SyncService then
+            UIManager:show(InfoMessage:new{
+                text = _("Cloud storage is unavailable. Enable the Cloud storage plugin and restart KOReader."),
+            })
+            return
+        end
         local sync_settings = SyncService:new{}
         sync_settings.onClose = function(this)
             UIManager:close(this)
         end
         sync_settings.onConfirm = function(sv)
-            settings.sync_server = sv
-            settings.user_id   = self:getUserId(settings)
-            settings.user_name = sv.name or sv.username
-            G_reader_settings:saveSetting("webdav_sync", settings)
-            if touchmenu_instance then touchmenu_instance:updateItems() end
-            UIManager:show(InfoMessage:new{
-                text = _("Syncest configured: ") .. (sv.name or sv.address),
-                timeout = 2,
-            })
+            save_server(sv)
         end
         UIManager:show(sync_settings)
     end
@@ -56,7 +80,9 @@ function WebDavAuth:setup(settings, touchmenu_instance)
     dialogue = ButtonDialog:new{
         title = T(_("Cloud storage:\n%1\n\nFolder path:\n%2"),
             (server.name or "") .. server_type,
-            SyncService.getReadablePath(server)),
+            cloud_storage and cloud_storage.getReadablePath(server)
+                or SyncService and SyncService.getReadablePath(server)
+                or server.url or server.address or ""),
         buttons = {
             {
                 {
