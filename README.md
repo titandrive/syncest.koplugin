@@ -154,6 +154,11 @@ Manual stats pushes and pulls reconcile the complete statistics history. Automat
 
 ## Changelog
 
+### 1.2.8
+
+- Restore compatibility with KOReader 2026.07 and newer by using the replacement Cloud storage plugin API.
+- Keep compatibility with older KOReader versions through the legacy SyncService fallback.
+
 ### 1.2.7
 
 - Push chapter-completion progress immediately instead of holding it behind the automatic page-turn cooldown.
