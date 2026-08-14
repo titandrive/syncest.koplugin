@@ -414,7 +414,8 @@ end
 -- ---------------------------------------------------------------------------
 -- Returns the WebDavApi module and base URL components from opts.settings.
 local function webdav(opts)
-    local WebDavApi = require("apps/cloudstorage/webdavapi")
+    local ok_webdav, WebDavApi = pcall(require, "apps/cloudstorage/webdavapi")
+    if not ok_webdav then WebDavApi = require("syncest_webdavapi") end
     local srv = opts.settings.sync_server or {}
     local base = WebDavApi:getJoinedPath(srv.address or "", srv.url or "")
     local function url(rel)

@@ -1,5 +1,6 @@
 local DataStorage = require("datastorage")
-local WebDavApi = require("apps/cloudstorage/webdavapi")
+local ok_webdav, WebDavApi = pcall(require, "apps/cloudstorage/webdavapi")
+if not ok_webdav then WebDavApi = require("syncest_webdavapi") end
 local json = require("json")
 local logger = require("logger")
 local http = require("socket.http")
