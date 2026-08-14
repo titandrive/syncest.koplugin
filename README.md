@@ -154,6 +154,11 @@ Manual stats pushes and pulls reconcile the complete statistics history. Automat
 
 ## Changelog
 
+### 1.2.9
+
+- Restore WebDAV syncing on KOReader versions that removed the legacy `apps/cloudstorage/webdavapi` module.
+- Fall back to Syncest's own WebDAV transport while retaining the legacy KOReader transport on older versions.
+
 ### 1.2.8
 
 - Restore compatibility with KOReader 2026.07 and newer by using the replacement Cloud storage plugin API.
