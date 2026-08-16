@@ -158,6 +158,7 @@ Manual stats pushes and pulls reconcile the complete statistics history. Automat
 
 - Prevent a queued resume progress pull from running again after the authoritative book-open pull.
 - Fix a full book-library push crash during embedded metadata enrichment.
+- Keep the Syncest submenu attached when Zen UI rebuilds its long-press book context menu.
 
 ### 1.2.9
 
