@@ -1830,6 +1830,27 @@ local function readest_format_for_ext(ext)
 end
 
 local zen_wrapped_file_choosers = setmetatable({}, { __mode = "k" })
+local zen_wrapped_setup_layouts = setmetatable({}, { __mode = "k" })
+
+function Syncest:registerZenFileDialogLayoutHook(file_manager_class)
+    if not rawget(_G, "__ZEN_UI_REGISTER_HOME_ITEM")
+            or type(file_manager_class) ~= "table"
+            or type(file_manager_class.setupLayout) ~= "function"
+            or zen_wrapped_setup_layouts[file_manager_class]
+                == file_manager_class.setupLayout then
+        return
+    end
+
+    local plugin = self
+    local original_setup_layout = file_manager_class.setupLayout
+    local function wrapped_setup_layout(file_manager, ...)
+        local result = original_setup_layout(file_manager, ...)
+        plugin:registerZenFileDialogSubmenu(file_manager)
+        return result
+    end
+    file_manager_class.setupLayout = wrapped_setup_layout
+    zen_wrapped_setup_layouts[file_manager_class] = wrapped_setup_layout
+end
 
 function Syncest:registerZenFileDialogSubmenu(file_manager)
     if not rawget(_G, "__ZEN_UI_REGISTER_HOME_ITEM") then return end
@@ -1957,6 +1978,7 @@ function Syncest:registerFileDialogButton()
                     end,
                 }}
             end)
+        plugin:registerZenFileDialogLayoutHook(FileManager)
         plugin:registerZenFileDialogSubmenu(FileManager.instance)
     end)
 end
@@ -1966,6 +1988,7 @@ function Syncest:onZenUIReady()
     UIManager:scheduleIn(0, function()
         local ok_FM, FileManager = pcall(require, "apps/filemanager/filemanager")
         if ok_FM then
+            plugin:registerZenFileDialogLayoutHook(FileManager)
             plugin:registerZenFileDialogSubmenu(FileManager.instance)
         end
     end)
