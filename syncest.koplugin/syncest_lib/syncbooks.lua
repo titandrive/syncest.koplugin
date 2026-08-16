@@ -297,6 +297,7 @@ M._metadata_needs_refresh = metadata_needs_refresh
 -- look complete enough that a missing-field-only check would preserve it.
 function M.enrichLocalMetadata(store)
     if not store then return 0 end
+    local logger = require("logger")
     local lfs = require("libs/libkoreader-lfs")
     local ok_registry, DocumentRegistry = pcall(
         require, "document/documentregistry")
