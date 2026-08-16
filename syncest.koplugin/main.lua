@@ -1771,6 +1771,10 @@ function Syncest:onDispatcherRegisterReaderActions()
 end
 
 function Syncest:onReaderReady()
+    -- Opening a book has its own authoritative progress pull. Cancel a resume
+    -- pull queued by the app/device wake sequence so it cannot run again once
+    -- the book-open pull has finished.
+    self:_cancelResumeProgressPull()
     if self.x_page_push_task then
         UIManager:unschedule(self.x_page_push_task)
         self.x_page_push_task = nil
