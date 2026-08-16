@@ -154,6 +154,11 @@ Manual stats pushes and pulls reconcile the complete statistics history. Automat
 
 ## Changelog
 
+### 1.2.10
+
+- Prevent a queued resume progress pull from running again after the authoritative book-open pull.
+- Fix a full book-library push crash during embedded metadata enrichment.
+
 ### 1.2.9
 
 - Restore WebDAV syncing on KOReader versions that removed the legacy `apps/cloudstorage/webdavapi` module.
