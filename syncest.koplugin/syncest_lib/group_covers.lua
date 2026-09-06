@@ -98,8 +98,7 @@ function M.child_cover_bb(book, orig_getBookInfo, BIM)
 end
 
 local function cache_dir()
-    local DataStorage = require("datastorage")
-    return DataStorage:getSettingsDir() .. "/syncest_group_thumbnails"
+    return require("syncest_lib.storage").path("syncest_group_thumbnails")
 end
 
 local function group_identity(group_by, value, shape)

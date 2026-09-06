@@ -202,12 +202,10 @@ function M.entry_from_row(row, opts)
         end
         if not local_cover and type(row.file_path) == "string"
                 and row.file_path:find("/archive/", 1, true) then
-            local DataStorage = require("datastorage")
             local lfs = require("libs/libkoreader-lfs")
-            local settings_dir = DataStorage:getSettingsDir()
-            local extracted = settings_dir .. "/syncest_covers/"
+            local extracted = require("syncest_lib.storage").path("syncest_covers") .. "/"
                 .. row.hash .. ".png"
-            local downloaded = settings_dir .. "/readest_covers/"
+            local downloaded = require("syncest_lib.storage").path("readest_covers") .. "/"
                 .. row.hash .. ".png"
             if lfs.attributes(extracted, "mode") == "file"
                     and lfs.attributes(downloaded, "mode") ~= "file" then
@@ -253,10 +251,9 @@ function M.entry_from_row(row, opts)
         entry._zen_effective_status = "reading"
         if row.archived_path then
             entry[M.ARCHIVED_FLAG] = true
-            local DataStorage = require("datastorage")
             local lfs = require("libs/libkoreader-lfs")
             local fallback = row.cover_path
-                or (DataStorage:getSettingsDir() .. "/syncest_covers/"
+                or (require("syncest_lib.storage").path("syncest_covers") .. "/"
                     .. row.hash .. ".png")
             if lfs.attributes(fallback, "mode") == "file" then
                 entry._syncest_local_cover = fallback

@@ -311,7 +311,7 @@ function Updater.install(zip_url, old_version, new_version, on_success)
 
     UIManager:scheduleIn(0.1, function()
         local ok_install, install_err = xpcall(function()
-        local cache_dir = DataStorage:getSettingsDir() .. "/syncest_cache"
+        local cache_dir = require("syncest_lib.storage").path("syncest_cache")
         if lfs.attributes(cache_dir, "mode") ~= "directory" then
             local ok_mkdir, mkdir_err = lfs.mkdir(cache_dir)
             if not ok_mkdir then

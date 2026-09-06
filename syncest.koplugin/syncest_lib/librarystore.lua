@@ -160,6 +160,19 @@ function M.new(opts)
     if prev < SCHEMA_VERSION then
         self.db:exec(string.format("PRAGMA user_version = %d;", SCHEMA_VERSION))
     end
+    if self.db_path ~= ":memory:" then
+        local Storage = require("syncest_lib.storage")
+        if self.db_path == Storage.path("syncest_library") then
+            for _, paths in ipairs(Storage.coverMoves()) do
+                local stmt = self.db:prepare([[
+                    UPDATE books SET cover_path = ? || substr(cover_path, ?)
+                    WHERE substr(cover_path, 1, ?) = ?
+                ]])
+                stmt:reset():bind(paths[2], #paths[1] + 1, #paths[1], paths[1]):step()
+                stmt:close()
+            end
+        end
+    end
     self._groups_cache = {}
     return self
 end

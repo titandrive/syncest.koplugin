@@ -242,8 +242,7 @@ function Syncest:_runBackgroundJSON(label, result_prefix, child_fn, on_complete,
         return false
     end
 
-    local DataStorage = require("datastorage")
-    local result_file = DataStorage:getSettingsDir()
+    local result_file = require("syncest_lib.storage").tempDir()
         .. "/" .. result_prefix .. "_" .. tostring(os.time()) .. ".json"
     os.remove(result_file)
 
@@ -562,8 +561,7 @@ function Syncest:_backgroundPushProgress(payload, notify)
         return false
     end
 
-    local DataStorage = require("datastorage")
-    local result_file = DataStorage:getSettingsDir()
+    local result_file = require("syncest_lib.storage").tempDir()
         .. "/syncest_progress_push_" .. tostring(os.time()) .. ".result"
     os.remove(result_file)
 
@@ -683,8 +681,7 @@ function Syncest:_backgroundPullProgress(book_hash, notify, force_apply, file, o
         return false
     end
 
-    local DataStorage = require("datastorage")
-    local result_file = DataStorage:getSettingsDir()
+    local result_file = require("syncest_lib.storage").tempDir()
         .. "/syncest_progress_pull_" .. tostring(os.time()) .. ".json"
     os.remove(result_file)
 
@@ -1634,6 +1631,7 @@ function Syncest:_installReaderBookmarkDeletionWatcher()
 end
 
 function Syncest:init()
+    require("syncest_lib.storage").init()
     self.last_sync_timestamp = 0
     self._last_pushed_page = nil
     self._last_observed_page = nil
@@ -2380,7 +2378,6 @@ function Syncest:_pushSingleLibraryBook(row)
     if not row then return end
 
     local syncbooks = require("syncest_lib.syncbooks")
-    local DataStorage = require("datastorage")
     local progress = InfoMessage:new{
         text = _("Uploading to Syncest Library…") .. " " .. (row.title or ""),
     }
@@ -2388,7 +2385,7 @@ function Syncest:_pushSingleLibraryBook(row)
 
     syncbooks.uploadBook(row, {
         settings = self.settings,
-        covers_dir = DataStorage:getSettingsDir() .. "/syncest_covers",
+        covers_dir = require("syncest_lib.storage").path("syncest_covers"),
     }, function(uploaded, upload_error, upload_status)
         if not uploaded then
             UIManager:close(progress)
@@ -3685,10 +3682,9 @@ function Syncest:getLibraryStore()
     end
     if self.library_store then self.library_store:close() end
     local LibraryStore = require("syncest_lib.librarystore")
-    local DataStorage  = require("datastorage")
     self.library_store = LibraryStore.new({
         user_id = self.settings.user_id,
-        db_path = DataStorage:getSettingsDir() .. "/syncest_library.sqlite3",
+        db_path = require("syncest_lib.storage").path("syncest_library"),
     })
     return self.library_store
 end
@@ -3836,10 +3832,9 @@ function Syncest:_backgroundSyncBooksLibrary(
         return false
     end
 
-    local DataStorage = require("datastorage")
-    local db_path = DataStorage:getSettingsDir() .. "/syncest_library.sqlite3"
+    local db_path = require("syncest_lib.storage").path("syncest_library")
     local result_prefix = "syncest_books_" .. tostring(mode or "both")
-    local progress_file = DataStorage:getSettingsDir()
+    local progress_file = require("syncest_lib.storage").tempDir()
         .. "/" .. result_prefix .. "_progress_" .. tostring(os.time()) .. ".json"
     local last_progress_key
     os.remove(progress_file)

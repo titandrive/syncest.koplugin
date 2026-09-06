@@ -1,4 +1,3 @@
-local DataStorage = require("datastorage")
 local ok_webdav, WebDavApi = pcall(require, "apps/cloudstorage/webdavapi")
 if not ok_webdav then WebDavApi = require("syncest_webdavapi") end
 local json = require("json")
@@ -266,7 +265,7 @@ local function tmp_path(rel_path)
     local suffix = tostring(rel_path or "root"):gsub("[^%w%.%-_]", "_")
     local now = ok_socket and socket.gettime and socket.gettime() or os.time()
     local nonce = tostring(now):gsub("[^%w]", "_") .. "_" .. tostring(math.random(1000000))
-    return DataStorage:getSettingsDir() .. "/syncest_tmp_" .. nonce .. "_" .. suffix .. ".json"
+    return require("syncest_lib.storage").tempDir() .. "/syncest_tmp_" .. nonce .. "_" .. suffix .. ".json"
 end
 
 function WebDavSyncClient:_markPathExists(rel_path)
@@ -288,6 +287,7 @@ function WebDavSyncClient:_readJSON(rel_path, block_timeout, retries)
             self:_url(rel_path), self.username, self.password, tmp)
     end, block_timeout, retries)
     if not ok then
+        os.remove(tmp)
         logger.warn("WebDavSyncClient _readJSON: network error for " .. rel_path .. ": " .. tostring(code))
         return nil, READ_FAILED
     end
@@ -302,7 +302,10 @@ function WebDavSyncClient:_readJSON(rel_path, block_timeout, retries)
     end
     self:_markPathExists(rel_path)
     local f = io.open(tmp, "r")
-    if not f then return nil, READ_FAILED end
+    if not f then
+        os.remove(tmp)
+        return nil, READ_FAILED
+    end
     local data = f:read("*a")
     f:close()
     os.remove(tmp)

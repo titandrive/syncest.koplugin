@@ -42,8 +42,7 @@ function M.get_meta(key)
 end
 
 function M.covers_dir()
-    local DataStorage = require("datastorage")
-    return DataStorage:getSettingsDir() .. "/readest_covers"
+    return require("syncest_lib.storage").path("readest_covers")
 end
 
 local function cover_path_for(hash)
@@ -59,8 +58,7 @@ function M.cached_cover_path(hash)
 end
 
 local function thumbnail_dir()
-    local DataStorage = require("datastorage")
-    return DataStorage:getSettingsDir() .. "/syncest_thumbnails"
+    return require("syncest_lib.storage").path("syncest_thumbnails")
 end
 
 local THUMBNAIL_BOUNDS = {
@@ -309,9 +307,7 @@ local function process_queue()
                     -- A local/archived copy may still have a valid extracted
                     -- cover. Persist that path so its row can bypass a stale
                     -- KOReader FakeCover without affecting unrelated books.
-                    local DataStorage = require("datastorage")
-                    local fallback = DataStorage:getSettingsDir()
-                        .. "/syncest_covers/" .. hash .. ".png"
+                    local fallback = require("syncest_lib.storage").path("syncest_covers") .. "/" .. hash .. ".png"
                     local lfs = require("libs/libkoreader-lfs")
                     if lfs.attributes(fallback, "mode") == "file" then
                         local LibraryWidget = package.loaded["syncest_lib.librarywidget"]
@@ -364,8 +360,7 @@ local function process_queue()
     -- transfer and poll it from the UI loop; only the result handling above
     -- runs in the parent process.
     local FFIUtil = require("ffi/util")
-    local DataStorage = require("datastorage")
-    local result_path = DataStorage:getSettingsDir()
+    local result_path = require("syncest_lib.storage").tempDir()
         .. "/syncest_cover_download_" .. hash .. ".json"
     os.remove(result_path)
     local settings = _opts and _opts.settings

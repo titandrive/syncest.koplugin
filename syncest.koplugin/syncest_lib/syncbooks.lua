@@ -199,8 +199,7 @@ local function encode_pretty_json(value, indent)
 end
 
 local function write_temp_json(data)
-    local DataStorage = require("datastorage")
-    local path = DataStorage:getSettingsDir()
+    local path = require("syncest_lib.storage").tempDir()
         .. "/syncest_book_marker_" .. tostring(os.time())
         .. "_" .. tostring(math.random(1000000)) .. ".json"
     local ok, encoded = pcall(encode_pretty_json, data)
@@ -653,8 +652,7 @@ function M.pushChangedBooks(opts, cb)
     -- Verify remote bytes before trusting cached cloud flags. Upload/repair
     -- objects first; only successfully backed rows may enter library.json.
     local inventory = opts.full_push and remote_book_inventory(changed, opts) or {}
-    local DataStorage = require("datastorage")
-    local covers_dir = DataStorage:getSettingsDir() .. "/syncest_covers"
+    local covers_dir = require("syncest_lib.storage").path("syncest_covers")
     local uploaded, failed, covers_repaired, covers_failed = 0, 0, 0, 0
     local publish_rows = {}
     local total_uploads = 0

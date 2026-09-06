@@ -44,7 +44,9 @@ After Syncest is installed, future updates can be installed from `Syncest` -> `S
 
 ## Setup
 
-Open `Syncest` -> `Syncest: Not configured` -> `Configure WebDAV` and choose a WebDAV target through KOReader's cloud storage picker. After configuration, the connection entry shows `Syncest: Idle` until the first sync request finishes. It then shows `Syncest: Connected` after a successful request or `Syncest: Disconnected` after a failed request. Syncest stores all data under the folder path configured there.
+Syncest keeps its local files under `koreader/settings/syncest/`: the library database, `covers/`, `downloaded_covers/`, and a `cache/` folder for thumbnails, updater downloads, and temporary sync files (`cache/tmp/`). Existing Syncest files migrate automatically on startup. Temporary transfers and background results are deleted after use; abandoned files older than 24 hours are cleaned on startup and during later sync activity. Shared KOReader settings, statistics, vocabulary, and book sidecars stay in their existing locations.
+
+Open `Syncest` -> `Syncest: Not configured` -> `Configure WebDAV` and choose a WebDAV target through KOReader's cloud storage picker. After configuration, the connection entry shows `Syncest: Idle` until the first sync request finishes. It then shows `Syncest: Connected` after a successful request or `Syncest: Disconnected` after a failed request. Syncest stores its cloud data under the folder path configured there.
 
 This works well with self-hosted storage such as Nextcloud, a WebDAV server exposed over a VPN, or any other WebDAV-compatible backend KOReader can reach.
 
@@ -153,6 +155,13 @@ The Library view menu keeps cloud-location filters in their own section. `Cloud 
 Manual stats pushes and pulls reconcile the complete statistics history. Automatic stats sync uses an incremental cursor for efficiency.
 
 ## Changelog
+
+### 1.2.11
+
+- Consolidate Syncest-owned files under `settings/syncest/`, with dedicated cache and temporary-file folders.
+- Automatically migrate existing library data, covers, thumbnails, and updater files on startup.
+- Clean up failed downloads and abandoned temporary sync files older than 24 hours.
+- Keep the cloud sync format compatible with devices running older Syncest versions. Downgrading locally requires restoring the previous storage layout.
 
 ### 1.2.10
 

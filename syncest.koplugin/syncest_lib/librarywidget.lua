@@ -143,8 +143,7 @@ end
 -- close + reopen if the user_id changed since last open (account switch).
 -- ---------------------------------------------------------------------------
 local function ensure_store(settings)
-    local DataStorage = require("datastorage")
-    local db_path = DataStorage:getSettingsDir() .. "/syncest_library.sqlite3"
+    local db_path = require("syncest_lib.storage").path("syncest_library")
     if M._store and M._current_user == settings.user_id then return M._store end
     if M._store then M._store:close() end
     M._store = LibraryStore.new({ user_id = settings.user_id, db_path = db_path })
@@ -660,11 +659,10 @@ local function runCloudSync(opts, store, full_refresh, completion_callback)
         logger.info("ReadestLibrary replaced automatic refresh with manual refresh")
     end
     local server = opts.client.server or opts.settings.sync_server
-    local DataStorage = require("datastorage")
     local FFIUtil = require("ffi/util")
     M._cloud_refresh_generation = (M._cloud_refresh_generation or 0) + 1
     local generation = M._cloud_refresh_generation
-    local result_path = DataStorage:getSettingsDir()
+    local result_path = require("syncest_lib.storage").tempDir()
         .. "/syncest_library_refresh_" .. tostring(generation) .. ".json"
     os.remove(result_path)
 
