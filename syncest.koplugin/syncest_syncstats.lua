@@ -11,6 +11,18 @@ local function db_path()
     return DataStorage:getSettingsDir() .. "/statistics.sqlite3"
 end
 
+-- Flush in the parent process before taking a background database snapshot.
+function SyncStats:flushPending()
+    local ok, loader = pcall(require, "pluginloader")
+    if not ok or type(loader.getPluginInstance) ~= "function" then return end
+    local plugin = loader:getPluginInstance("statistics")
+    if plugin and type(plugin.insertDB) == "function"
+            and (not plugin.isEnabled or plugin:isEnabled()) then
+        local flushed, err = pcall(plugin.insertDB, plugin)
+        if not flushed then logger.warn("Syncest stats flush failed", err) end
+    end
+end
+
 -- Read book md5/title/authors + page events with start_time > cursor.
 function SyncStats:collectSince(cursor)
     local conn = SQ3.open(db_path())
@@ -45,12 +57,27 @@ end
 function SyncStats:applyRemote(books, pages)
     local conn = SQ3.open(db_path())
     conn:exec("BEGIN;")
-    local insert_book = conn:prepare("INSERT OR IGNORE INTO book (title, authors, md5) VALUES (?, ?, ?);")
+    local insert_book = conn:prepare([[
+        INSERT OR IGNORE INTO book (title, authors, md5)
+        SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM book WHERE md5 = ?);
+    ]])
     for _, b in ipairs(books or {}) do
-        insert_book:reset():bind(b.title or "", b.authors or "", b.book_hash):step()
+        insert_book:reset():bind(b.title or "", b.authors or "", b.book_hash, b.book_hash):step()
     end
     insert_book:close()
     local find_id = conn:prepare("SELECT id FROM book WHERE md5 = ? LIMIT 1;")
+    -- KOReader can have several book IDs for the same hash (metadata changes).
+    -- Match existing events across those IDs, using the same identity as cloud
+    -- merge, instead of duplicating a session under the first book ID.
+    local find_events = conn:prepare([[
+        SELECT p.id_book FROM page_stat_data p JOIN book b ON b.id = p.id_book
+        WHERE b.md5 = ? AND p.page = ? AND p.start_time = ?
+        ORDER BY p.duration DESC, p.id_book ASC;
+    ]])
+    local delete_duplicates = conn:prepare([[
+        DELETE FROM page_stat_data WHERE page = ? AND start_time = ? AND id_book <> ?
+        AND id_book IN (SELECT id FROM book WHERE md5 = ?);
+    ]])
     local insert_page = conn:prepare([[
         INSERT INTO page_stat_data (id_book, page, start_time, duration, total_pages)
         VALUES (?, ?, ?, ?, ?)
@@ -59,18 +86,40 @@ function SyncStats:applyRemote(books, pages)
     local id_cache = {}
     local touched = {}
     for _, p in ipairs(pages or {}) do
-        local id = id_cache[p.book_hash]
+        find_events:reset():bind(p.book_hash, p.page, p.start_time)
+        local existing = find_events:step()
+        local id = existing and tonumber(existing[1]) or id_cache[p.book_hash]
+        local matches = 0
+        while existing do
+            touched[tonumber(existing[1])] = true
+            matches = matches + 1
+            existing = find_events:step()
+        end
         if not id then
             local r = find_id:reset():bind(p.book_hash):step()
             if r ~= nil then id = tonumber(r[1]); id_cache[p.book_hash] = id end
         end
         if id then
             insert_page:reset():bind(id, p.page, p.start_time, p.duration, p.total_pages):step()
+            if matches > 1 then
+                delete_duplicates:reset():bind(p.page, p.start_time, id, p.book_hash):step()
+            end
             touched[id] = true
         end
     end
     find_id:close()
+    find_events:close()
+    delete_duplicates:close()
     insert_page:close()
+    -- KOReader's page_stat view drops rows when book.pages is NULL. Infer a
+    -- missing page count from the newest imported session, preserving a known
+    -- local layout's page count (which may differ on another screen).
+    conn:exec([[
+        UPDATE book SET pages = (
+            SELECT total_pages FROM page_stat_data WHERE id_book = book.id AND total_pages > 0
+            ORDER BY start_time DESC LIMIT 1
+        ) WHERE pages IS NULL OR pages <= 0;
+    ]])
     -- Mirror the Readest app's recomputeBookTotals so a KOReader device shows
     -- fresh totals right after a pull (id is a trusted integer from the DB).
     for id in pairs(touched) do
@@ -89,7 +138,8 @@ function SyncStats:push(settings, client, interactive, notify_fn)
     -- `settings` is the plain readest_sync data table (see main.lua:init), so
     -- the cursor is a field; persist by saving the whole table back to
     -- G_reader_settings, mirroring readest_syncauth.
-    local cursor = settings.stats_push_cursor or 0
+    self:flushPending()
+    local cursor = 0
     local books, pages = self:collectSince(cursor)
     logger.dbg("ReadestStats push: cursor=" .. tostring(cursor)
         .. " collected books=" .. #books .. " pages=" .. #pages

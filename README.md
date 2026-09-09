@@ -84,7 +84,7 @@ The `<book-hash>` folder names are stable machine identifiers. The `_<Book Title
 
 `annotations.json` stores notes and highlights for a single book. Deleted annotations are synced as tombstones so another device can remove the same annotation instead of resurrecting it.
 
-`stats.json` stores reading-stat rows from KOReader's statistics database.
+`stats.json` stores reading-stat rows from KOReader's statistics database. Stats uploads use an exclusive WebDAV write lock, upload and verify a temporary file, preserve the previous valid file as `stats.json.bak`, then publish with a WebDAV MOVE. A failed or interrupted transfer never uploads partial bytes over the live file. This requires a WebDAV server that supports write locks and file MOVE; Syncest does not fall back to unsafe direct overwrites. Locks expire after three minutes if a device stops mid-sync. Older Syncest versions can still read the same format, but must be updated to protect their uploads too.
 
 `vocab.json` stores vocabulary builder entries.
 
@@ -152,9 +152,16 @@ If an archive folder is configured, pushing the Syncest book library skips books
 
 The Library view menu keeps cloud-location filters in their own section. `Cloud Books` shows catalog books that are not on the current device, while `Local Books` shows catalog books that are also present locally; enabling both shows the complete cloud catalog. `Refresh` performs an authoritative rebuild from `library.json` while preserving device-local file detection. `Wipe Cloud` requires confirmation, deletes `library.json` and the uploaded `books/` collection, and never deletes local device files.
 
-Manual stats pushes and pulls reconcile the complete statistics history. Automatic stats sync uses an incremental cursor for efficiency.
+Manual and automatic stats pushes and pulls reconcile the complete statistics history, including older sessions uploaded late and duration updates to existing sessions. Imported books with a missing page count are repaired from their session data so KOReader's stats views include them.
 
 ## Changelog
+
+### 1.2.12
+
+- Protect stats uploads with WebDAV write locks, verified temporary files, backups, and MOVE replacement.
+- Reconcile complete reading history so older sessions and updated durations reach every device.
+- Repair missing book page counts and merge duplicate reading events so synced stats appear correctly.
+- Keep the existing cloud format; update every device to protect all stats uploads. WebDAV write-lock and MOVE support are required.
 
 ### 1.2.11
 

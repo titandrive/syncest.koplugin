@@ -97,3 +97,21 @@ for _, code in ipairs({'throw', 404, 500, 200}) do
     assert((result ~= nil) == (code == 200))
 end
 print('PASS: network exception, 404, HTTP failure, successful download cleanup')
+
+-- Old sessions arriving from another device must not be filtered by our cursor.
+local late = { book_hash = 'book', page = 1, start_time = 10, duration = 30, total_pages = 100 }
+Client._readJSON = function() return { statBooks = {}, statPages = { late } } end
+local pulled
+Client:pullChanges({type='stats',since=1000},function(ok,response)
+    assert(ok); pulled=response
+end)
+assert(#pulled.statPages == 1 and pulled.statPages[1] == late)
+local _, merged = Client:_mergeStats({statBooks={},statPages={late}}, {}, {
+    {book_hash='book',page=1,start_time=10,duration=45,total_pages=100},
+    {book_hash='book',page=2,start_time=20,duration=15,total_pages=100},
+})
+assert(#merged == 2)
+local duration=0
+for _,p in ipairs(merged) do duration=duration+p.duration end
+assert(duration == 60)
+print('PASS: late-arriving stats and longer-duration union merge')

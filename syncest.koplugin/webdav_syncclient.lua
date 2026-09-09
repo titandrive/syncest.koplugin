@@ -628,6 +628,36 @@ function WebDavSyncClient:_mergeStats(existing, incoming_books, incoming_pages)
     return merged_books, merged_pages
 end
 
+function WebDavSyncClient:_writeStats(books, pages)
+    local Atomic = require("syncest_lib.atomic_json")
+    -- Use the bundled transport for LOCK/COPY/MOVE on all KOReader versions.
+    local Api = require("syncest_webdavapi")
+    local function request(method, url, body, headers)
+        local ok, code, response, response_headers = withTimeout("stats " .. method, function()
+            return Api:requestData(method, url, self.username, self.password, body, headers)
+        end, 15, 0)
+        if not ok then return nil, tostring(code), {} end
+        return code, response, response_headers
+    end
+    local ok, err = Atomic.update(self:_url("stats.json"), request, function(body)
+        if not body then
+            local code, backup = request("GET", self:_url("stats.json.bak"))
+            if code == 200 then
+                body = backup
+            elseif code ~= 404 then
+                error("cannot check statistics backup: " .. tostring(code))
+            end
+        end
+        local remote = body and json.decode(body) or { statBooks = {}, statPages = {} }
+        assert(type(remote) == "table" and type(remote.statBooks) == "table"
+            and type(remote.statPages) == "table", "invalid cloud statistics; refusing to overwrite")
+        local merged_books, merged_pages = self:_mergeStats(remote, books, pages)
+        return json.encode({ statBooks = merged_books, statPages = merged_pages })
+    end)
+    if not ok then logger.warn("Syncest stats publication failed: " .. tostring(err)) end
+    return ok
+end
+
 -- ── Public API ─────────────────────────────────────────────────────
 
 -- WebDAV layout under {base_path}/:
@@ -673,20 +703,8 @@ function WebDavSyncClient:pullChanges(params, callback)
     elseif t == "stats" then
         local data, read_status = self:_readJSON("stats.json")
         if data then
-            -- Stats start_time values and the pull cursor are Unix seconds.
-            -- Older Syncest builds accidentally persisted milliseconds.
-            if since > 100000000000 then since = math.floor(since / 1000) end
-            -- Filter pages newer than the cursor; stamp updated_at_ms so the
-            -- stats module can advance its pull cursor.
-            if since > 0 and data.statPages then
-                local filtered = {}
-                for _, p in ipairs(data.statPages) do
-                    if (tonumber(p.start_time) or 0) > since then
-                        filtered[#filtered + 1] = p
-                    end
-                end
-                data.statPages = filtered
-            end
+            -- The whole file is already downloaded. Reconcile every record:
+            -- older sessions and longer durations can arrive after our cursor.
             for _, p in ipairs(data.statPages or {}) do
                 p.updated_at_ms = (tonumber(p.start_time) or 0) * 1000
             end
@@ -945,17 +963,8 @@ function WebDavSyncClient:pushChanges(changes, callback)
     -- Stats — union merge with remote
     if (changes.statBooks and #changes.statBooks > 0)
             or (changes.statPages and #changes.statPages > 0) then
-        local remote, read_status = self:_readJSON("stats.json")
-        if remote == nil and read_status ~= READ_MISSING then
+        if not self:_writeStats(changes.statBooks, changes.statPages) then
             ok = false
-        else
-            remote = remote or {}
-            local mb, mp = self:_mergeStats(
-                remote, changes.statBooks, changes.statPages)
-            if not self:_writeJSON("stats.json",
-                    {statBooks = mb, statPages = mp}) then
-                ok = false
-            end
         end
     end
 

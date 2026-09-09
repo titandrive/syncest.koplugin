@@ -24,6 +24,22 @@ local function request(opts)
     return code, headers, status
 end
 
+-- Small WebDAV transactions used for safely replacing shared JSON files.
+-- No automatic mutation retries: a lost response may mean the server committed.
+function WebDavApi:requestData(method, url, user, pass, body, headers)
+    local response = {}
+    headers = headers or {}
+    headers["Cache-Control"] = "no-cache"
+    if body then headers["Content-Length"] = #body end
+    local code, response_headers = request{
+        url = url, method = method, user = user, password = pass,
+        headers = headers,
+        source = body and ltn12.source.string(body) or nil,
+        sink = ltn12.sink.table(response),
+    }
+    return code, table.concat(response), response_headers or {}
+end
+
 function WebDavApi:downloadFile(file_url, user, pass, local_path, progress_callback)
     local file = io.open(local_path, "w")
     if not file then return nil end

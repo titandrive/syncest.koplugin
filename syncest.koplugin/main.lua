@@ -824,16 +824,16 @@ function Syncest:_backgroundPushStats(notify, manual, retried)
     if self:_deferUntilProgressAndAnnotationsIdle("background stats push", function()
             self:_backgroundPushStats(notify, manual, retried)
         end) then return false end
+    SyncStats:flushPending()
     local settings = copy_settings(self.settings)
     local failure_fn = notify and function() self:_autoFailureNotify("stats") end or nil
     return self:_runBackgroundJSON("background stats push", "syncest_stats_push", function()
         local Stats = require("syncest_syncstats")
         local Client = require("webdav_syncclient")
         local client = Client:new{ server = server }
-        -- A manual push is also the repair path: resend the complete local
-        -- history so older rows missed by another device can be merged into
-        -- stats.json. Automatic pushes remain incremental.
-        local cursor = manual and 0 or (settings.stats_push_cursor or 0)
+        -- Every write already merges the complete cloud file. Include all
+        -- local rows so delayed sessions and updated durations cannot be lost.
+        local cursor = 0
         local books, pages = Stats:collectSince(cursor)
         if #pages == 0 then
             return { success = true, empty = true }
