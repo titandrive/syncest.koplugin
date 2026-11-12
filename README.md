@@ -164,6 +164,10 @@ Manual and automatic stats pushes and pulls reconcile the complete statistics hi
 
 ## Changelog
 
+### 1.2.14
+
+- Fix Silverfish sync not updating the running pet: Syncest looked the plugin up by the wrong name, so a pulled pet was written to the save file while Silverfish kept showing (and would later re-save) the old one. A pulled pet is now applied to the running plugin, and is never written behind it.
+
 ### 1.2.13
 
 - Sync the Silverfish reading pet between devices when the Silverfish plugin is installed. The most-fed pet wins; a fresh egg never replaces an existing pet.

@@ -18,7 +18,8 @@ local SyncSilverfish = {}
 SyncSilverfish.FILE = "silverfish.json"
 SyncSilverfish.FORMAT = 1
 
-local PLUGIN_NAME = "traca"
+-- KOReader names a plugin after its folder ("silverfish"); the module itself says "traca". Check both.
+local PLUGIN_NAMES = { "silverfish", "traca" }
 
 -- ── Discovery ──────────────────────────────────────────────────────
 
@@ -27,15 +28,26 @@ function SyncSilverfish.instance()
     for _, mod in ipairs({ "apps/reader/readerui", "apps/filemanager/filemanager" }) do
         local ok, App = pcall(require, mod)
         local ui = ok and App and App.instance
-        local traca = ui and ui[PLUGIN_NAME]
-        if type(traca) == "table" and type(traca.estado) == "table" then return traca end
+        if ui then
+            for _, name in ipairs(PLUGIN_NAMES) do
+                local traca = ui[name]
+                if type(traca) == "table" and type(traca.estado) == "table"
+                        and type(traca.salvar) == "function" then
+                    return traca
+                end
+            end
+        end
     end
 end
 
 --- Silverfish is installed and enabled.
 function SyncSilverfish.installed()
     local disabled = G_reader_settings and G_reader_settings:readSetting("plugins_disabled")
-    if type(disabled) == "table" and disabled[PLUGIN_NAME] then return false end
+    if type(disabled) == "table" then
+        for _, name in ipairs(PLUGIN_NAMES) do
+            if disabled[name] then return false end
+        end
+    end
     if SyncSilverfish.instance() then return true end
     local ok, lfs = pcall(require, "libs/libkoreader-lfs")
     if not ok then return false end
@@ -79,6 +91,8 @@ function SyncSilverfish.snapshot()
         estado, ninhada = db:readSetting("estado"), db:readSetting("ninhada")
     end
     if type(estado) ~= "table" or estado.dev_simulacao then return nil end
+    logger.dbg("Syncest Silverfish: snapshot from", traca and "running plugin" or "save file",
+        "letters", tostring(estado.letras))
     local Device = require("device")
     return {
         format    = SyncSilverfish.FORMAT,
@@ -130,19 +144,16 @@ function SyncSilverfish.apply(remote)
     local okE, Estado = pcall(require, "traca_estado")
     local okB, Brood = pcall(require, "traca_brood")
     local traca = SyncSilverfish.instance()
-    if traca and okE and okB then
-        estado = Estado.normalizar(estado, agora)
-        Estado.passarTempo(estado, agora)
-        traca.estado = estado
-        traca.ninhada = Brood.normalize(ninhada, agora)
-        traca:salvar(true)
-    else
-        -- no running Silverfish (should not happen when installed): write its file directly
-        local db = require("luasettings"):open(DataStorage:getSettingsDir() .. "/traca.lua")
-        db:saveSetting("estado", estado)
-        if ninhada then db:saveSetting("ninhada", ninhada) else db:delSetting("ninhada") end
-        db:flush()
+    if not (traca and okE and okB) then
+        -- Never write traca.lua behind a running Silverfish: its in-memory pet would save over it.
+        logger.warn("Syncest Silverfish: running plugin not found, remote pet not applied")
+        return false
     end
+    estado = Estado.normalizar(estado, agora)
+    Estado.passarTempo(estado, agora)
+    traca.estado = estado
+    traca.ninhada = Brood.normalize(ninhada, agora)
+    traca:salvar(true)
     logger.info("Syncest Silverfish: adopted pet from", tostring(remote.device),
         "letters", tostring(remote.summary and remote.summary.letras))
     return true
