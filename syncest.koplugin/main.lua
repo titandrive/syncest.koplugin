@@ -1059,6 +1059,7 @@ function Syncest:pushSilverfish(notify, manual)
         return { success = true, remote = response_data and response_data.silverfish_remote }
     end, function(result)
         self.settings.silverfish_last_pushed_at = os.time()
+        self.settings.silverfish_last_pushed_key = SyncSilverfish.changeKey(snapshot)
         G_reader_settings:saveSetting("webdav_sync", self.settings)
         if result.remote then
             -- the server's pet is further along: take it
@@ -1100,14 +1101,18 @@ function Syncest:pullSilverfish(notify, manual)
     end, failure_fn)
 end
 
---- Auto push after reading stops (book closed, device asleep), once Silverfish has saved. Debounced.
+--- Auto push when the pet changed: Silverfish announces each save (SilverfishChanged; also on book close for
+-- an older Silverfish that doesn't). Debounced, so a run of pages makes one push; skipped when nothing a push
+-- would carry has changed (same pet, letters and last pet); silent, like other background syncs.
 function Syncest:_scheduleSilverfishPush(delay)
     if not self.settings.auto_sync or WebDavAuth:needsSetup(self.settings) then return end
     if self.settings.auto_push_silverfish == false or not SyncSilverfish.installed() then return end
     if self._silverfish_push_task then UIManager:unschedule(self._silverfish_push_task) end
     self._silverfish_push_task = function()
         self._silverfish_push_task = nil
-        self:_runSafely("auto push silverfish", function() self:pushSilverfish(true) end)
+        local key = SyncSilverfish.changeKey(SyncSilverfish.snapshot())
+        if not key or key == self.settings.silverfish_last_pushed_key then return end
+        self:_runSafely("auto push silverfish", function() self:pushSilverfish(false) end)
     end
     if delay and delay > 0 then
         UIManager:scheduleIn(delay, self._silverfish_push_task)
@@ -1129,7 +1134,7 @@ function Syncest:_scheduleSilverfishPull(delay)
         self._auto_pull_silverfish_task = nil
         if os.time() - (SyncSilverfish.last_pull_at or 0) < 120 then return end
         SyncSilverfish.last_pull_at = os.time()
-        self:_runSafely("auto pull silverfish", function() self:pullSilverfish(true) end)
+        self:_runSafely("auto pull silverfish", function() self:pullSilverfish(false) end)
     end
     UIManager:scheduleIn(delay or 5, self._auto_pull_silverfish_task)
 end
@@ -3208,7 +3213,7 @@ function Syncest:_silverfishSyncSettingItems()
             separator = true,
         },
         {
-            text = _("Push Silverfish on book close and sleep"),
+            text = _("Push Silverfish when it changes"),
             enabled_func = function() return self.settings.auto_sync end,
             checked_func = function() return self.settings.auto_push_silverfish ~= false end,
             callback = toggle("auto_push_silverfish"),
@@ -4402,12 +4407,15 @@ end
 
 function Syncest:onSuspend()
     self:_cancelResumeProgressPull()
-    self:_scheduleSilverfishPush(0)
 end
 
 function Syncest:onPause()
     self:_cancelResumeProgressPull()
-    self:_scheduleSilverfishPush(0)
+end
+
+--- Silverfish saved (every 10 pages, a new stage, a pet, a book closing): push it once things settle.
+function Syncest:onSilverfishChanged()
+    self:_scheduleSilverfishPush(30)
 end
 
 -- Fires when a word is looked up (and potentially added to vocab builder).

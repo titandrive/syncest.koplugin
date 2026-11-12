@@ -62,7 +62,16 @@ local function summary(estado)
         letras     = tonumber(estado.letras) or 0,
         nascimento = tonumber(estado.nascimento) or 0,
         atualizado = tonumber(estado.atualizado) or 0,
+        carinho_em = tonumber(estado.carinho_em) or 0,
     }
+end
+
+--- What a push would change on the server: the pet, its generation, letters eaten and last pet. Not the
+-- time it was last updated, which moves on every save even when nothing happened.
+function SyncSilverfish.changeKey(snapshot)
+    local s = snapshot and snapshot.summary
+    if not s then return nil end
+    return table.concat({ s.nascimento, s.geracao, s.letras, s.carinho_em or 0 }, ":")
 end
 
 local function load_lua(s)
