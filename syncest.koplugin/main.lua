@@ -19,6 +19,7 @@ local SyncConfig = require("syncest_syncconfig")
 local SyncAnnotations = require("syncest_syncannotations")
 local SyncStats = require("syncest_syncstats")
 local SyncVocab = require("syncest_syncvocab")
+local SyncSilverfish = require("syncest_syncsilverfish")
 
 local Syncest = WidgetContainer:new{
     name = "syncest",
@@ -328,6 +329,8 @@ function Syncest:_isOtherDataSyncBusy()
         or self["_deferred_background stats pull"] ~= nil
         or self["_deferred_background vocab push"] ~= nil
         or self["_deferred_background vocab pull"] ~= nil
+        or jobs["background silverfish push"] ~= nil
+        or jobs["background silverfish pull"] ~= nil
 end
 
 function Syncest:_isAutoSyncBundleBusy()
@@ -1018,6 +1021,119 @@ function Syncest:_backgroundPullVocab(notify)
     end, failure_fn)
 end
 
+-- ── Silverfish sync (only when silverfish.koplugin is installed) ───
+
+function Syncest:_silverfishAdopted(remote, notify)
+    if not SyncSilverfish.remoteWins(remote) then return false end
+    if not SyncSilverfish.apply(remote) then return false end
+    if notify then self:_autoNotify("silverfish", "pulled") end
+    return true
+end
+
+--- Push the local pet; if the server already has a more-fed pet, adopt that one instead.
+function Syncest:pushSilverfish(notify, manual)
+    if not SyncSilverfish.installed() then return false end
+    local server = self.settings and self.settings.sync_server
+    if type(server) ~= "table" or WebDavAuth:needsSetup(self.settings) then return false end
+    if NetworkMgr:willRerunWhenOnline(function() self:pushSilverfish(notify, manual) end) then
+        return false
+    end
+    local snapshot = SyncSilverfish.snapshot()
+    if not snapshot then
+        if manual then
+            UIManager:show(InfoMessage:new{ text = _("No Silverfish pet to push."), timeout = 2 })
+        end
+        return false
+    end
+    local failure_fn = notify and function() self:_autoFailureNotify("silverfish") end or nil
+    return self:_runBackgroundJSON("background silverfish push", "syncest_silverfish_push", function()
+        local Client = require("webdav_syncclient")
+        local client = Client:new{ server = server }
+        local pushed, response_data, message = false, nil, nil
+        client:pushChanges({ silverfish = snapshot }, function(success, response, status)
+            pushed = success == true
+            response_data = response
+            message = tostring(status or "")
+        end)
+        if not pushed then return { success = false, message = message } end
+        return { success = true, remote = response_data and response_data.silverfish_remote }
+    end, function(result)
+        self.settings.silverfish_last_pushed_at = os.time()
+        G_reader_settings:saveSetting("webdav_sync", self.settings)
+        if result.remote then
+            -- the server's pet is further along: take it
+            if not self:_silverfishAdopted(result.remote, notify) and manual then
+                UIManager:show(InfoMessage:new{ text = _("Silverfish is already up to date."), timeout = 2 })
+            end
+        elseif notify then
+            self:_autoNotify("silverfish", "pushed")
+        end
+    end, failure_fn)
+end
+
+--- Pull the server's pet and adopt it if it is more fed than the local one.
+function Syncest:pullSilverfish(notify, manual)
+    if not SyncSilverfish.installed() then return false end
+    local server = self.settings and self.settings.sync_server
+    if type(server) ~= "table" or WebDavAuth:needsSetup(self.settings) then return false end
+    if NetworkMgr:willRerunWhenOnline(function() self:pullSilverfish(notify, manual) end) then
+        return false
+    end
+    local failure_fn = notify and function() self:_autoFailureNotify("silverfish") end or nil
+    return self:_runBackgroundJSON("background silverfish pull", "syncest_silverfish_pull", function()
+        local Client = require("webdav_syncclient")
+        local client = Client:new{ server = server }
+        local pulled, response_data, message = false, nil, nil
+        client:pullChanges({ type = "silverfish" }, function(success, response, status)
+            pulled = success == true
+            response_data = response
+            message = tostring(status or "")
+        end)
+        if not pulled then return { success = false, message = message } end
+        return { success = true, remote = response_data }
+    end, function(result)
+        self.settings.silverfish_last_pulled_at = os.time()
+        G_reader_settings:saveSetting("webdav_sync", self.settings)
+        if not self:_silverfishAdopted(result.remote, notify) and manual then
+            UIManager:show(InfoMessage:new{ text = _("Silverfish is already up to date."), timeout = 2 })
+        end
+    end, failure_fn)
+end
+
+--- Auto push after reading stops (book closed, device asleep), once Silverfish has saved. Debounced.
+function Syncest:_scheduleSilverfishPush(delay)
+    if not self.settings.auto_sync or WebDavAuth:needsSetup(self.settings) then return end
+    if self.settings.auto_push_silverfish == false or not SyncSilverfish.installed() then return end
+    if self._silverfish_push_task then UIManager:unschedule(self._silverfish_push_task) end
+    self._silverfish_push_task = function()
+        self._silverfish_push_task = nil
+        self:_runSafely("auto push silverfish", function() self:pushSilverfish(true) end)
+    end
+    if delay and delay > 0 then
+        UIManager:scheduleIn(delay, self._silverfish_push_task)
+    else
+        self._silverfish_push_task()
+    end
+end
+
+--- Auto pull on app open and wake (at most every few minutes).
+function Syncest:_scheduleSilverfishPull(delay)
+    if not self.settings.auto_sync or WebDavAuth:needsSetup(self.settings) then return end
+    if self.settings.auto_pull_silverfish == false or not SyncSilverfish.installed() then return end
+    -- module-level: Syncest is re-created for every book and file manager, the throttle must outlive it
+    -- (stamped when the pull runs, not when scheduled: a cancelled pull must not block the next one)
+    local last = SyncSilverfish.last_pull_at or 0
+    if os.time() - last < 120 then return end
+    if self._auto_pull_silverfish_task then UIManager:unschedule(self._auto_pull_silverfish_task) end
+    self._auto_pull_silverfish_task = function()
+        self._auto_pull_silverfish_task = nil
+        if os.time() - (SyncSilverfish.last_pull_at or 0) < 120 then return end
+        SyncSilverfish.last_pull_at = os.time()
+        self:_runSafely("auto pull silverfish", function() self:pullSilverfish(true) end)
+    end
+    UIManager:scheduleIn(delay or 5, self._auto_pull_silverfish_task)
+end
+
 function Syncest:_backgroundPushAnnotations(payload, notify, doc_path)
     local server = self.settings and self.settings.sync_server
     if type(server) ~= "table" then return false end
@@ -1195,6 +1311,7 @@ Syncest.default_settings = {
     annotation_notifications = true,
     stats_notifications      = true,
     vocab_notifications      = true,
+    silverfish_notifications = true,
     books_notifications      = true,
     mirror_to_kosync         = false,
     progress_history_filter  = "both",
@@ -1224,6 +1341,7 @@ function Syncest:_notificationEnabled(kind)
         annotations = "annotation_notifications",
         stats = "stats_notifications",
         vocab = "vocab_notifications",
+        silverfish = "silverfish_notifications",
         books = "books_notifications",
         connection = "connection_notifications",
     }
@@ -1239,12 +1357,13 @@ function Syncest:_flushAutoNotify()
         self._notify_batch_flush_delay = nil
         return
     end
-    local order = { "progress", "annotations", "stats", "vocab" }
+    local order = { "progress", "annotations", "stats", "vocab", "silverfish" }
     local label_names = {
         progress = _("progress"),
         annotations = _("annotations"),
         stats = _("stats"),
         vocab = _("vocab"),
+        silverfish = _("Silverfish"),
     }
     local parts = {}
     local actions = {}
@@ -1429,6 +1548,7 @@ function Syncest:_cancelAutoPullTasks()
         "_auto_pull_book_stats_task",
         "_auto_pull_stats_task",
         "_auto_pull_vocab_task",
+        "_auto_pull_silverfish_task",
     }
     for _, name in ipairs(tasks) do
         if self[name] then
@@ -1460,6 +1580,7 @@ function Syncest:_scheduleStartupGlobalPulls()
         end
         UIManager:scheduleIn(18, self._auto_pull_vocab_task)
     end
+    self:_scheduleSilverfishPull(20)
 end
 
 function Syncest:_syncConnectionRestored()
@@ -1729,6 +1850,14 @@ function Syncest:onDispatcherRegisterActions()
     Dispatcher:registerAction("syncest_pull_vocab",
         { category="none", event="SyncestPullVocab",
           title=_("Syncest: Pull vocabulary from Syncest"), general=true })
+    if SyncSilverfish.installed() then
+        Dispatcher:registerAction("syncest_push_silverfish",
+            { category="none", event="SyncestPushSilverfish",
+              title=_("Syncest: Push Silverfish to Syncest"), general=true })
+        Dispatcher:registerAction("syncest_pull_silverfish",
+            { category="none", event="SyncestPullSilverfish",
+              title=_("Syncest: Pull Silverfish from Syncest"), general=true })
+    end
     Dispatcher:registerAction("syncest_push_all_annotations",
         { category="none", event="SyncestPushAllAnnotations",
           title=_("Syncest: Push all annotations to Syncest"), general=true })
@@ -2560,12 +2689,14 @@ function Syncest:onResume()
     if not self:_pullProgressOnResume() then
         self:backgroundUpdateCheck()
     end
+    self:_scheduleSilverfishPull(8)
 end
 
 function Syncest:onLeaveStandby()
     if not self:_pullProgressOnResume() then
         self:backgroundUpdateCheck()
     end
+    self:_scheduleSilverfishPull(8)
 end
 
 function Syncest:updateMenuItems()
@@ -2863,6 +2994,7 @@ function Syncest:addToMainMenu(menu_items)
                             G_reader_settings:saveSetting("webdav_sync", self.settings)
                         end,
                     },
+                    unpack(self:_silverfishSyncSettingItems()),
                 },
             },
             {
@@ -2876,6 +3008,9 @@ function Syncest:addToMainMenu(menu_items)
                         { _("Books and library"), "books_notifications" },
                         { _("Connection"), "connection_notifications" },
                     }
+                    if SyncSilverfish.installed() then
+                        table.insert(definitions, 5, { _("Silverfish"), "silverfish_notifications" })
+                    end
                     local notification_items = {}
                     for _, definition in ipairs(definitions) do
                         local label, key = definition[1], definition[2]
@@ -3015,6 +3150,27 @@ function Syncest:addToMainMenu(menu_items)
             end
         end
 
+        -- Silverfish push/pull now, right after the vocab ones (only when it is installed)
+        if SyncSilverfish.installed() then
+            for i, item in ipairs(items) do
+                if item.text == _("Pull vocab now") then
+                    item.separator = nil
+                    table.insert(items, i + 1, {
+                        text = _("Push Silverfish now"),
+                        enabled_func = function() return configured end,
+                        callback = function() self:pushSilverfish(true, true) end,
+                    })
+                    table.insert(items, i + 2, {
+                        text = _("Pull Silverfish now"),
+                        enabled_func = function() return configured end,
+                        callback = function() self:pullSilverfish(true, true) end,
+                        separator = true,
+                    })
+                    break
+                end
+            end
+        end
+
         -- TouchMenu paginates submenus by a fixed item count rather than
         -- supporting explicit page-break entries. Use the final position of
         -- Pull books now (after reader/file-manager items are inserted) as
@@ -3033,6 +3189,36 @@ function Syncest:addToMainMenu(menu_items)
     menu_items.syncest = {
         text = _("Syncest"),
         sub_item_table_func = syncest_menu_items,
+    }
+end
+
+--- "Sync settings" entries for Silverfish; empty when it is not installed.
+function Syncest:_silverfishSyncSettingItems()
+    if not SyncSilverfish.installed() then return {} end
+    local function toggle(key)
+        return function()
+            self.settings[key] = self.settings[key] == false
+            G_reader_settings:saveSetting("webdav_sync", self.settings)
+        end
+    end
+    return {
+        {
+            text = _("Silverfish"),
+            enabled_func = function() return false end,
+            separator = true,
+        },
+        {
+            text = _("Push Silverfish on book close and sleep"),
+            enabled_func = function() return self.settings.auto_sync end,
+            checked_func = function() return self.settings.auto_push_silverfish ~= false end,
+            callback = toggle("auto_push_silverfish"),
+        },
+        {
+            text = _("Pull Silverfish on app open and wake"),
+            enabled_func = function() return self.settings.auto_sync end,
+            checked_func = function() return self.settings.auto_pull_silverfish ~= false end,
+            callback = toggle("auto_pull_silverfish"),
+        },
     }
 end
 
@@ -3627,6 +3813,7 @@ function Syncest:pushAll(interactive)
         end
         self:pushBookStats(false, true, interactive == true)
         self:pushVocab(false, true)
+        self:pushSilverfish(true)
     end, interactive)
 end
 
@@ -3640,6 +3827,7 @@ function Syncest:pullAll(interactive)
         end
         self:pullBookStats(false, true, interactive == true)
         self:pullVocab(false, true)
+        self:pullSilverfish(true)
     end, interactive)
 end
 
@@ -4142,6 +4330,12 @@ end
 function Syncest:onSyncestPullVocab()
     self:_runSafely("manual pull vocab", function() self:pullVocab(false, true) end, true)
 end
+function Syncest:onSyncestPushSilverfish()
+    self:_runSafely("manual push silverfish", function() self:pushSilverfish(true, true) end, true)
+end
+function Syncest:onSyncestPullSilverfish()
+    self:_runSafely("manual pull silverfish", function() self:pullSilverfish(true, true) end, true)
+end
 function Syncest:onSyncestPushAllAnnotations()
     self:_runSafely("manual push all annotations", function() self:pushAllFileAnnotations(true) end, true)
 end
@@ -4202,14 +4396,18 @@ function Syncest:onCloseDocument()
         vocab = self.settings.auto_push_vocab ~= false,
         annotations = push_annotations,
     })
+    -- after Silverfish has counted the last page and saved (its own onCloseDocument)
+    self:_scheduleSilverfishPush(2)
 end
 
 function Syncest:onSuspend()
     self:_cancelResumeProgressPull()
+    self:_scheduleSilverfishPush(0)
 end
 
 function Syncest:onPause()
     self:_cancelResumeProgressPull()
+    self:_scheduleSilverfishPush(0)
 end
 
 -- Fires when a word is looked up (and potentially added to vocab builder).
@@ -4403,6 +4601,8 @@ function Syncest:onCloseWidget()
         UIManager:unschedule(self._vocab_push_task)
         self._vocab_push_task = nil
     end
+    -- _silverfish_push_task is left scheduled on purpose: closing a book closes this reader instance
+    -- right after onCloseDocument scheduled it.
     if self._annotations_push_task then
         UIManager:unschedule(self._annotations_push_task)
         self._annotations_push_task = nil

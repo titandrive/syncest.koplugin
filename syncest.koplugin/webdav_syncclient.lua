@@ -725,6 +725,14 @@ function WebDavSyncClient:pullChanges(params, callback)
         end
         callback(true, data or {words = {}}, 200)
 
+    elseif t == "silverfish" then
+        local data, read_status = self:_readJSON("silverfish.json")
+        if read_status == READ_FAILED then
+            callback(false, {}, "read_failed")
+            return
+        end
+        callback(true, data, 200)
+
     else
         callback(false, nil, 400)
     end
@@ -982,6 +990,22 @@ function WebDavSyncClient:pushChanges(changes, callback)
         end
     end
 
+    -- Silverfish pet — most-fed copy wins; a better remote pet is handed back to adopt
+    local response = {}
+    if changes.silverfish then
+        local remote, read_status = self:_readJSON("silverfish.json")
+        if remote == nil and read_status ~= READ_MISSING then
+            ok = false
+        else
+            local SyncSilverfish = require("syncest_syncsilverfish")
+            if remote and SyncSilverfish.better(remote.summary, changes.silverfish.summary) then
+                response.silverfish_remote = remote
+            elseif not self:_writeJSON("silverfish.json", changes.silverfish) then
+                ok = false
+            end
+        end
+    end
+
     -- Library book rows — union merge with remote
     if changes.books and #changes.books > 0 then
         local remote, read_status = self:_readJSON("library.json", LIBRARY_TIMEOUT, 0)
@@ -998,7 +1022,7 @@ function WebDavSyncClient:pushChanges(changes, callback)
         end
     end
 
-    callback(ok, {}, ok and 200 or 500)
+    callback(ok, response, ok and 200 or 500)
 end
 
 function WebDavSyncClient:pullBooks(params, callback)

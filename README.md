@@ -12,6 +12,7 @@ Syncest was made primarily to be used alongside [Obsidian MoonSync](https://gith
 - Sync annotations, including deleted annotation tombstones.
 - Sync KOReader reading statistics.
 - Sync vocabulary builder entries.
+- Sync the Silverfish reading pet between devices (when the Silverfish plugin is installed).
 - Maintain a Syncest book library with optional book and cover upload/download.
 - Browse the authoritative cloud catalog in grid or list view, with filters for
   cloud-only books and cloud books already present on the current device.
@@ -26,6 +27,7 @@ Syncest was made primarily to be used alongside [Obsidian MoonSync](https://gith
   - Push vocab after word lookup.
   - Pull progress and annotations on book open, with an optional stats pull.
   - Pull stats and vocab on app open.
+  - Push the Silverfish pet on book close and sleep; pull it on app open and wake.
 - Background update checks with in-plugin install prompts.
 
 ## Installation
@@ -52,7 +54,7 @@ This works well with self-hosted storage such as Nextcloud, a WebDAV server expo
 
 ## Notifications
 
-Open `Syncest` -> `Notifications` to enable or disable status notifications for progress, annotations, statistics, vocabulary, books and library operations, and connection changes. All notification types are enabled by default.
+Open `Syncest` -> `Notifications` to enable or disable status notifications for progress, annotations, statistics, vocabulary, Silverfish (when installed), books and library operations, and connection changes. All notification types are enabled by default.
 
 These controls suppress routine status notifications. Required confirmations and actionable error dialogs remain visible.
 
@@ -64,6 +66,7 @@ Syncest writes JSON files and optional book assets under the configured WebDAV f
 library.json
 stats.json
 vocab.json
+silverfish.json
 sync/
   <book-hash>/
     progress.json
@@ -87,6 +90,8 @@ The `<book-hash>` folder names are stable machine identifiers. The `_<Book Title
 `stats.json` stores reading-stat rows from KOReader's statistics database. Stats uploads use an exclusive WebDAV write lock, upload and verify a temporary file, preserve the previous valid file as `stats.json.bak`, then publish with a WebDAV MOVE. A failed or interrupted transfer never uploads partial bytes over the live file. This requires a WebDAV server that supports write locks and file MOVE; Syncest does not fall back to unsafe direct overwrites. Locks expire after three minutes if a device stops mid-sync. Older Syncest versions can still read the same format, but must be updated to protect their uploads too.
 
 `vocab.json` stores vocabulary builder entries.
+
+`silverfish.json` stores the Silverfish pet (only when the Silverfish plugin is installed). The pet is one evolving state, so it is not merged field by field: the most-fed copy wins. A later generation beats an earlier one, then more letters eaten; between two different pets with equal progress the older pet wins, so a fresh egg on a new device never replaces an existing pet. A push that finds a more-fed pet on the server adopts that pet instead of overwriting it. The state is stored in Silverfish's own Lua serialization inside the JSON so it round-trips exactly.
 
 `library.json` stores the Syncest book catalog: hashes, titles, authors, formats, reading status, timestamps, and metadata used by the Syncest Library view.
 
@@ -114,6 +119,7 @@ Global pulls happen when KOReader/Syncest starts:
 
 - Pull stats on app open.
 - Pull vocab on app open.
+- Pull the Silverfish pet on app open and on wake (at most every two minutes).
 
 Pushes happen when data changes or when a book closes:
 
@@ -127,6 +133,7 @@ Pushes happen when data changes or when a book closes:
 - Push stats on book close.
 - Optionally push stats on app suspend.
 - Push vocab on word lookup.
+- Push the Silverfish pet on book close and on suspend.
 
 ## Manual Sync
 
@@ -139,8 +146,9 @@ The main Syncest menu also includes:
 
 - Push/pull stats.
 - Push/pull vocab.
+- Push/pull Silverfish (when installed).
 - Push/pull the Syncest book library and book files.
-- Push all / Pull all for progress, annotations, stats, and vocab.
+- Push all / Pull all for progress, annotations, stats, vocab, and Silverfish.
 
 `Push all` and `Pull all` do not upload or download book files or the book catalog. Book library sync is kept separate on purpose.
 
@@ -155,6 +163,11 @@ The Library view menu keeps cloud-location filters in their own section. `Cloud 
 Manual and automatic stats pushes and pulls reconcile the complete statistics history, including older sessions uploaded late and duration updates to existing sessions. Imported books with a missing page count are repaired from their session data so KOReader's stats views include them.
 
 ## Changelog
+
+### 1.2.13
+
+- Sync the Silverfish reading pet between devices when the Silverfish plugin is installed. The most-fed pet wins; a fresh egg never replaces an existing pet.
+- Silverfish pushes on book close and sleep, pulls on app open and wake, with manual push/pull, dispatcher actions, Push all/Pull all support, sync-setting toggles, and a notification toggle. All of it is hidden when Silverfish is not installed.
 
 ### 1.2.12
 
