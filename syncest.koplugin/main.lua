@@ -20,7 +20,6 @@ local SyncAnnotations = require("syncest_syncannotations")
 local SyncStats = require("syncest_syncstats")
 local SyncVocab = require("syncest_syncvocab")
 local SyncSilverfish = require("syncest_syncsilverfish")
-local Diag = require("syncest_diag")
 
 local Syncest = WidgetContainer:new{
     name = "syncest",
@@ -509,8 +508,6 @@ function Syncest:_markProgressPayloadPushed(payload)
 end
 
 function Syncest:_notifyProgressPushResult(notify, success, unchanged)
-    Diag.log("result", "notify=" .. tostring(notify), "success=" .. tostring(success),
-        "unchanged=" .. tostring(unchanged == true))
     if not notify or not self:_notificationEnabled("progress") then return end
     if notify == "chapter" then
         local text
@@ -548,18 +545,11 @@ function Syncest:_backgroundPushProgress(payload, notify)
     local manual_history = history_entry
         and history_entry.source == "manual"
     if self:_progressPayloadAlreadyPushed(payload) and not manual_history then
-        Diag.log("queue: unchanged, skipped push", "notify=" .. tostring(notify))
         logger.info("Syncest background progress push: unchanged, skipped")
         self:_notifyProgressPushResult(notify, true, true)
         return true
     end
     if self._auto_push_progress_running then
-        local replaced = self._pending_auto_push_progress
-        Diag.log("queue: push already running, queued", "notify=" .. tostring(notify),
-            "replacing_pending=" .. tostring(replaced ~= nil),
-            "replaced_notify=" .. tostring(replaced and replaced.notify),
-            "running_for=" .. (self._auto_push_progress_started
-                and (Time.to_ms(Time.now() - self._auto_push_progress_started) .. "ms") or "?"))
         logger.info("Syncest background progress push: already running, queued latest")
         self._pending_auto_push_progress = {
             payload = payload,
@@ -608,9 +598,6 @@ function Syncest:_backgroundPushProgress(payload, notify)
     local pid = pid_or_err
     self._auto_push_progress_running = true
     self._auto_push_progress_pid = pid
-    self._auto_push_progress_started = Time.now()
-    local started = self._auto_push_progress_started
-    Diag.log("queue: subprocess launched", "pid=" .. tostring(pid), "notify=" .. tostring(notify))
     local polls = 0
     local poll
     poll = function()
@@ -621,7 +608,6 @@ function Syncest:_backgroundPushProgress(payload, notify)
                 return
             end
             FFIUtil.terminateSubProcess(pid)
-            Diag.log("queue: push timed out after", Time.to_ms(Time.now() - started) .. "ms")
             logger.warn("Syncest background progress push: timed out")
             self._auto_push_progress_running = false
             self._auto_push_progress_pid = nil
@@ -633,9 +619,6 @@ function Syncest:_backgroundPushProgress(payload, notify)
         self._auto_push_progress_running = false
         self._auto_push_progress_pid = nil
         local success, message = read_background_result(result_file)
-        Diag.log("queue: push finished", "success=" .. tostring(success),
-            "took=" .. Time.to_ms(Time.now() - started) .. "ms", "polls=" .. polls,
-            success and "" or ("message=" .. tostring(message)))
         if success then
             logger.info("Syncest background progress push: success")
             self:_syncConnectionRestored()
@@ -651,7 +634,6 @@ function Syncest:_backgroundPushProgress(payload, notify)
         end
         local pending = self._pending_auto_push_progress
         if pending then
-            Diag.log("queue: running queued push", "notify=" .. tostring(pending.notify))
             self._pending_auto_push_progress = nil
             self:_backgroundPushProgress(pending.payload, pending.notify)
         end
@@ -1266,29 +1248,19 @@ end
 
 --- Like NetworkMgr:willRerunWhenOnline, minus its online test: that resolves a hostname on the UI thread,
 -- which on Android (behind a slow resolver such as a VPN's) can freeze KOReader for seconds before a push
--- even starts. Being connected is enough here: every request runs in a background process and reports a
--- failure itself if the network turns out not to be usable. Returns true when `callback` will run later.
-function Syncest:_willRerunWhenNetworkReady(callback, what)
-    local start = Diag.enabled and Time.now() or nil
+-- even starts. Being connected (Wi-Fi, mobile data or Ethernet) is enough here: every request runs in a
+-- background process and reports a failure itself if the network turns out not to be usable.
+-- Returns true when `callback` will run later.
+function Syncest:_willRerunWhenNetworkReady(callback)
     local ok, connected = pcall(NetworkMgr.isConnected, NetworkMgr)
-    local ready = ok and connected == true
-    if start then
-        Diag.log("network check", tostring(what or ""), "took=" .. Time.to_ms(Time.now() - start) .. "ms",
-            "connected=" .. tostring(ready))
-    end
-    if ready then return false end
+    if ok and connected == true then return false end
     return NetworkMgr:willRerunWhenConnected(callback)
 end
 
 function Syncest:pushBookConfigAsync(notify, history_source, history_reason)
     logger.info("Syncest pushBookConfigAsync: notify=" .. tostring(notify))
-    Diag.log("push requested", "notify=" .. tostring(notify), "source=" .. tostring(history_source),
-        "reason=" .. tostring(history_reason), "page=" .. tostring(self._last_observed_page))
     local config = SyncConfig:getCurrentBookConfig(self.ui)
-    if not config then
-        Diag.log("push dropped: no book config")
-        return
-    end
+    if not config then return end
     local payload = self:_addProgressReadingStatus({
         books = {},
         notes = {},
@@ -1302,14 +1274,11 @@ function Syncest:pushBookConfigAsync(notify, history_source, history_reason)
     local already_pushed = self:_progressPayloadAlreadyPushed(payload)
     if self:_willRerunWhenNetworkReady(
             function()
-                Diag.log("push rerun after network came up", "notify=" .. tostring(notify))
                 self:pushBookConfigAsync(notify, history_source, history_reason)
-            end, "progress push") then
+            end) then
         return
     end
     local launched = self:_backgroundPushProgress(payload, notify)
-    Diag.log("push handed to queue", "launched=" .. tostring(launched),
-        "already_pushed=" .. tostring(already_pushed))
     if launched then
         self.last_sync_timestamp = os.time()
     end
@@ -1804,7 +1773,6 @@ function Syncest:init()
     self._last_pushed_page = nil
     self._last_observed_page = nil
     self.settings = G_reader_settings:readSetting("webdav_sync", self.default_settings)
-    Diag.enabled = self.settings.diagnostic_log == true
     if self.settings.pending_pushes ~= nil
             or self.settings.auto_push_on_suspend ~= nil
             or self.settings.auto_push_progress_suspend ~= nil
@@ -2734,7 +2702,6 @@ function Syncest:_pullProgressOnResume()
 end
 
 function Syncest:onResume()
-    Diag.log("resume", Diag.network())
     if not self:_pullProgressOnResume() then
         self:backgroundUpdateCheck()
     end
@@ -3082,12 +3049,6 @@ function Syncest:addToMainMenu(menu_items)
                 text = _("Updates"),
                 sub_item_table_func = function()
                     return self:updateMenuItems()
-                end,
-            },
-            {
-                text = _("Diagnostic log"),
-                sub_item_table_func = function()
-                    return self:diagnosticMenuItems()
                 end,
                 separator = true,
             },
@@ -4351,7 +4312,6 @@ function Syncest:onSyncestOpenProgressHistory()
 end
 
 function Syncest:onSyncestPushProgress()
-    Diag.log("manual push gesture", Diag.network())
     self:_runSafely("manual push progress", function()
         self:pushBookConfigAsync(true, "manual", "manual")
     end, true)
@@ -4456,56 +4416,7 @@ function Syncest:onCloseDocument()
     self:_scheduleSilverfishPush(2)
 end
 
-function Syncest:onNetworkConnected()
-    Diag.log("network connected", Diag.network())
-end
-
-function Syncest:onNetworkDisconnected()
-    Diag.log("network disconnected")
-end
-
-function Syncest:diagnosticMenuItems()
-    return {
-        {
-            text = _("Write diagnostic log"),
-            help_text = _("Records page turns, chapter detection, push timing, the push queue and Wi-Fi state to settings/syncest/diagnostic.log, for tracking down late or slow pushes."),
-            checked_func = function() return self.settings.diagnostic_log == true end,
-            callback = function()
-                self.settings.diagnostic_log = self.settings.diagnostic_log ~= true
-                Diag.enabled = self.settings.diagnostic_log
-                G_reader_settings:saveSetting("webdav_sync", self.settings)
-                Diag.log("diagnostic log turned on", Diag.network())
-            end,
-        },
-        {
-            text = _("View diagnostic log"),
-            keep_menu_open = true,
-            callback = function()
-                local text = Diag.read()
-                if text and #text > 60000 then text = "…\n" .. text:sub(-60000) end
-                local TextViewer = require("ui/widget/textviewer")
-                UIManager:show(TextViewer:new{
-                    title = _("Syncest diagnostic log"),
-                    text = text or _("The log is empty."),
-                    monospace_font = true,
-                    justified = false,
-                })
-            end,
-        },
-        {
-            text = _("Clear diagnostic log"),
-            keep_menu_open = true,
-            callback = function()
-                Diag.clear()
-                Diag.log("log cleared")
-                UIManager:show(Notification:new{ text = _("Diagnostic log cleared"), timeout = 2 })
-            end,
-        },
-    }
-end
-
 function Syncest:onSuspend()
-    Diag.log("suspend")
     self:_cancelResumeProgressPull()
 end
 
@@ -4543,18 +4454,6 @@ function Syncest:onPageUpdate(page)
     end
     local should_push = false
     local notify_push = false
-    if Diag.enabled then
-        local toc = self.ui and self.ui.toc
-        local start_ok, is_start = pcall(function() return toc and toc:isChapterStart(page) end)
-        local title_ok, title = pcall(function() return toc and toc:getTocTitleByPage(page) end)
-        title = title_ok and title or nil
-        local changed = self._diag_last_title ~= nil and title ~= self._diag_last_title
-        Diag.log("page", tostring(self._last_observed_page) .. "->" .. tostring(page),
-            "chapter_start=" .. tostring(start_ok and is_start),
-            changed and ("TITLE CHANGED to \"" .. tostring(title) .. "\"") or "",
-            (changed and not (start_ok and is_start)) and "(title changed on a page not marked as chapter start)" or "")
-        self._diag_last_title = title
-    end
     if self.settings.auto_push_progress_chapter == true
             and self._last_observed_page
             and page == self._last_observed_page + 1
@@ -4563,7 +4462,6 @@ function Syncest:onPageUpdate(page)
             and self.ui.toc:isChapterStart(page) then
         logger.info("Syncest onPageUpdate: chapter finished at page "
             .. tostring(self._last_observed_page))
-        Diag.log("chapter finished, push scheduled in", CHAPTER_PUSH_DELAY .. "s")
         should_push = true
         notify_push = true
     end
@@ -4592,7 +4490,6 @@ function Syncest:onPageUpdate(page)
                 return
             end
             self.x_page_push_task = nil
-            Diag.log("page push task running", "chapter=" .. tostring(self.x_page_push_notify == true))
             local notify = self.x_page_push_notify == true and "chapter" or false
             self.x_page_push_notify = nil
             if notify == "chapter" then

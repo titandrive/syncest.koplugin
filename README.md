@@ -164,6 +164,11 @@ Manual and automatic stats pushes and pulls reconcile the complete statistics hi
 
 ## Changelog
 
+### 1.2.15
+
+- Fix manual and chapter pushes sometimes stalling for seconds on Android: before every sync Syncest checked that it was online with a hostname lookup on KOReader's main thread, which could freeze reading behind a slow resolver (such as a VPN's) and made chapter pushes look like they waited for the next page turn. It now only checks that a network is connected (Wi-Fi, mobile data or Ethernet).
+- Push the Silverfish pet only when it changes, silently, instead of on every pause.
+
 ### 1.2.14
 
 - Fix Silverfish sync not updating the running pet: Syncest looked the plugin up by the wrong name, so a pulled pet was written to the save file while Silverfish kept showing (and would later re-save) the old one. A pulled pet is now applied to the running plugin, and is never written behind it.
