@@ -20,6 +20,7 @@ local SyncAnnotations = require("syncest_syncannotations")
 local SyncStats = require("syncest_syncstats")
 local SyncVocab = require("syncest_syncvocab")
 local SyncSilverfish = require("syncest_syncsilverfish")
+local SyncXray = require("syncest_syncxray")
 
 local Syncest = WidgetContainer:new{
     name = "syncest",
@@ -331,6 +332,8 @@ function Syncest:_isOtherDataSyncBusy()
         or self["_deferred_background vocab pull"] ~= nil
         or jobs["background silverfish push"] ~= nil
         or jobs["background silverfish pull"] ~= nil
+        or jobs["background xray push"] ~= nil
+        or jobs["background xray pull"] ~= nil
 end
 
 function Syncest:_isAutoSyncBundleBusy()
@@ -1139,6 +1142,196 @@ function Syncest:_scheduleSilverfishPull(delay)
     UIManager:scheduleIn(delay or 5, self._auto_pull_silverfish_task)
 end
 
+-- ── X-Ray sync (only when xray.koplugin is installed) ──────────────
+
+-- Remember what was last pushed or adopted for a book, so an unchanged analysis is not pushed again.
+function Syncest:_xraySeen(book_hash, key)
+    if not book_hash then return nil end
+    self.settings.xray_pushed_keys = self.settings.xray_pushed_keys or {}
+    if key ~= nil then
+        self.settings.xray_pushed_keys[book_hash] = key
+        G_reader_settings:saveSetting("webdav_sync", self.settings)
+    end
+    return self.settings.xray_pushed_keys[book_hash]
+end
+
+--- Take the server's analysis of the open book if it goes further than this device's.
+-- X-Ray mid-analysis would save over it, so wait for it to finish (a few tries).
+function Syncest:_xrayAdopted(remote, notify, attempt)
+    local ui = self.ui
+    if not (ui and ui.document) then return false end
+    if not SyncXray.remoteWins(remote, ui) then return false end
+    if SyncXray.busy(ui) then
+        attempt = (attempt or 0) + 1
+        if attempt <= 6 then
+            logger.info("Syncest X-Ray: X-Ray is analysing, applying the pulled analysis later")
+            self._xray_adopt_task = function()
+                self._xray_adopt_task = nil
+                self:_runSafely("adopt xray", function() self:_xrayAdopted(remote, notify, attempt) end)
+            end
+            UIManager:scheduleIn(20, self._xray_adopt_task)
+        end
+        return true
+    end
+    if not SyncXray.apply(remote, ui) then return false end
+    self:_xraySeen(self:getBookIdentifiers(), SyncXray.changeKey(SyncXray.snapshot(ui)))
+    if notify then self:_autoNotify("xray", "pulled") end
+    return true
+end
+
+--- Push the open book's X-Ray analysis. `snapshot` can be taken beforehand (on book close, while the
+-- book is still open). If the server already has a further analysis, adopt that one instead.
+function Syncest:pushXray(notify, manual, snapshot, book_hash)
+    if not SyncXray.installed() then return false end
+    local server = self.settings and self.settings.sync_server
+    if type(server) ~= "table" or WebDavAuth:needsSetup(self.settings) then return false end
+    book_hash = book_hash or self:getBookIdentifiers()
+    if not book_hash then
+        if manual then
+            UIManager:show(InfoMessage:new{ text = _("Open a book to sync its X-Ray analysis."), timeout = 2 })
+        end
+        return false
+    end
+    snapshot = snapshot or SyncXray.snapshot(self.ui)
+    if not snapshot then
+        if manual then
+            UIManager:show(InfoMessage:new{ text = _("X-Ray has not analysed this book yet."), timeout = 2 })
+        end
+        return false
+    end
+    if self:_willRerunWhenNetworkReady(function() self:pushXray(notify, manual, snapshot, book_hash) end) then
+        return false
+    end
+    local failure_fn = notify and function() self:_autoFailureNotify("xray") end or nil
+    return self:_runBackgroundJSON("background xray push", "syncest_xray_push", function()
+        local Client = require("webdav_syncclient")
+        local client = Client:new{ server = server }
+        local pushed, response_data, message = false, nil, nil
+        client:pushChanges({ xray = { book_hash = book_hash, snapshot = snapshot } },
+            function(success, response, status)
+                pushed = success == true
+                response_data = response
+                message = tostring(status or "")
+            end)
+        if not pushed then return { success = false, message = message } end
+        return { success = true, remote = response_data and response_data.xray_remote }
+    end, function(result)
+        self:_xraySeen(book_hash, SyncXray.changeKey(snapshot))
+        if result.remote then
+            -- the server's analysis goes further: take it (if this book is still open)
+            if not (self:getBookIdentifiers() == book_hash and self:_xrayAdopted(result.remote, notify))
+                    and manual then
+                UIManager:show(InfoMessage:new{ text = _("X-Ray is already up to date."), timeout = 2 })
+            end
+        elseif notify then
+            self:_autoNotify("xray", "pushed")
+        end
+    end, failure_fn)
+end
+
+--- Pull the server's analysis of the open book and adopt it if it goes further than this device's.
+function Syncest:pullXray(notify, manual)
+    if not SyncXray.installed() then return false end
+    local server = self.settings and self.settings.sync_server
+    if type(server) ~= "table" or WebDavAuth:needsSetup(self.settings) then return false end
+    local book_hash = self:getBookIdentifiers()
+    if not book_hash then
+        if manual then
+            UIManager:show(InfoMessage:new{ text = _("Open a book to sync its X-Ray analysis."), timeout = 2 })
+        end
+        return false
+    end
+    if self:_willRerunWhenNetworkReady(function() self:pullXray(notify, manual) end) then
+        return false
+    end
+    local failure_fn = notify and function() self:_autoFailureNotify("xray") end or nil
+    return self:_runBackgroundJSON("background xray pull", "syncest_xray_pull", function()
+        local Client = require("webdav_syncclient")
+        local client = Client:new{ server = server }
+        local pulled, response_data, message = false, nil, nil
+        client:pullChanges({ type = "xray", book = book_hash }, function(success, response, status)
+            pulled = success == true
+            response_data = response
+            message = tostring(status or "")
+        end)
+        if not pulled then return { success = false, message = message } end
+        return { success = true, remote = response_data }
+    end, function(result)
+        if self:getBookIdentifiers() ~= book_hash then return end -- book closed meanwhile
+        if not result.remote then
+            if manual then
+                UIManager:show(InfoMessage:new{
+                    text = _("There is no X-Ray analysis of this book on the server yet."), timeout = 2 })
+            end
+        elseif not self:_xrayAdopted(result.remote, notify) and manual then
+            UIManager:show(InfoMessage:new{ text = _("X-Ray is already up to date."), timeout = 2 })
+        end
+    end, failure_fn)
+end
+
+--- On book open: fetch the server's analysis early, before X-Ray starts catching up on its own.
+function Syncest:_scheduleXrayPull(delay)
+    if not self.settings.auto_sync or WebDavAuth:needsSetup(self.settings) then return end
+    if self.settings.auto_pull_xray == false or not SyncXray.installed() then return end
+    if self._auto_pull_xray_task then UIManager:unschedule(self._auto_pull_xray_task) end
+    self._auto_pull_xray_task = function()
+        self._auto_pull_xray_task = nil
+        self:_runSafely("auto pull xray", function() self:pullXray(false) end)
+    end
+    UIManager:scheduleIn(delay or 0.5, self._auto_pull_xray_task)
+end
+
+--- On book close: push the analysis if X-Ray changed it since the last push (taken now, while the book
+-- is still open, since page positions need it).
+function Syncest:_pushXrayOnClose()
+    if not self.settings.auto_sync or WebDavAuth:needsSetup(self.settings) then return end
+    if self.settings.auto_push_xray == false or not SyncXray.installed() then return end
+    local book_hash = self:getBookIdentifiers()
+    if not book_hash then return end
+    local snapshot = SyncXray.snapshot(self.ui)
+    local key = SyncXray.changeKey(snapshot)
+    if not key or key == self:_xraySeen(book_hash) then return end
+    self:pushXray(false, false, snapshot, book_hash)
+end
+
+--- Sync settings for the other plugins Syncest works with (Silverfish, X-Ray), as one list: only the last
+-- unpack() in a table constructor expands to all its values.
+function Syncest:_pluginSyncSettingItems()
+    local items = {}
+    for _, item in ipairs(self:_silverfishSyncSettingItems()) do items[#items + 1] = item end
+    for _, item in ipairs(self:_xraySyncSettingItems()) do items[#items + 1] = item end
+    return items
+end
+
+function Syncest:_xraySyncSettingItems()
+    if not SyncXray.installed() then return {} end
+    local function toggle(key)
+        return function()
+            self.settings[key] = self.settings[key] == false
+            G_reader_settings:saveSetting("webdav_sync", self.settings)
+        end
+    end
+    return {
+        {
+            text = _("X-Ray"),
+            enabled_func = function() return false end,
+            separator = true,
+        },
+        {
+            text = _("Push X-Ray analysis on book close"),
+            enabled_func = function() return self.settings.auto_sync end,
+            checked_func = function() return self.settings.auto_push_xray ~= false end,
+            callback = toggle("auto_push_xray"),
+        },
+        {
+            text = _("Pull X-Ray analysis on book open"),
+            enabled_func = function() return self.settings.auto_sync end,
+            checked_func = function() return self.settings.auto_pull_xray ~= false end,
+            callback = toggle("auto_pull_xray"),
+        },
+    }
+end
+
 function Syncest:_backgroundPushAnnotations(payload, notify, doc_path)
     local server = self.settings and self.settings.sync_server
     if type(server) ~= "table" then return false end
@@ -1328,6 +1521,7 @@ Syncest.default_settings = {
     stats_notifications      = true,
     vocab_notifications      = true,
     silverfish_notifications = true,
+    xray_notifications       = true,
     books_notifications      = true,
     mirror_to_kosync         = false,
     progress_history_filter  = "both",
@@ -1358,6 +1552,7 @@ function Syncest:_notificationEnabled(kind)
         stats = "stats_notifications",
         vocab = "vocab_notifications",
         silverfish = "silverfish_notifications",
+        xray = "xray_notifications",
         books = "books_notifications",
         connection = "connection_notifications",
     }
@@ -1373,13 +1568,14 @@ function Syncest:_flushAutoNotify()
         self._notify_batch_flush_delay = nil
         return
     end
-    local order = { "progress", "annotations", "stats", "vocab", "silverfish" }
+    local order = { "progress", "annotations", "stats", "vocab", "silverfish", "xray" }
     local label_names = {
         progress = _("progress"),
         annotations = _("annotations"),
         stats = _("stats"),
         vocab = _("vocab"),
         silverfish = _("Silverfish"),
+        xray = _("X-Ray"),
     }
     local parts = {}
     local actions = {}
@@ -1565,6 +1761,7 @@ function Syncest:_cancelAutoPullTasks()
         "_auto_pull_stats_task",
         "_auto_pull_vocab_task",
         "_auto_pull_silverfish_task",
+        "_auto_pull_xray_task",
     }
     for _, name in ipairs(tasks) do
         if self[name] then
@@ -1874,6 +2071,14 @@ function Syncest:onDispatcherRegisterActions()
             { category="none", event="SyncestPullSilverfish",
               title=_("Syncest: Pull Silverfish from Syncest"), general=true })
     end
+    if SyncXray.installed() then
+        Dispatcher:registerAction("syncest_push_xray",
+            { category="none", event="SyncestPushXray",
+              title=_("Syncest: Push X-Ray analysis to Syncest"), reader=true })
+        Dispatcher:registerAction("syncest_pull_xray",
+            { category="none", event="SyncestPullXray",
+              title=_("Syncest: Pull X-Ray analysis from Syncest"), reader=true })
+    end
     Dispatcher:registerAction("syncest_push_all_annotations",
         { category="none", event="SyncestPushAllAnnotations",
           title=_("Syncest: Push all annotations to Syncest"), general=true })
@@ -1924,6 +2129,8 @@ function Syncest:onReaderReady()
     end
     self.x_page_push_notify = nil
     if self.settings.auto_sync and not WebDavAuth:needsSetup(self.settings) then
+        -- before X-Ray starts catching up on its own a few seconds after opening
+        self:_scheduleXrayPull(0.5)
         if STARTUP_AUTO_PULL_PROGRESS_ENABLED
                 and self.settings.auto_pull_progress ~= false then
             self:_runSafely("auto pull progress", function()
@@ -3010,7 +3217,7 @@ function Syncest:addToMainMenu(menu_items)
                             G_reader_settings:saveSetting("webdav_sync", self.settings)
                         end,
                     },
-                    unpack(self:_silverfishSyncSettingItems()),
+                    unpack(self:_pluginSyncSettingItems()),
                 },
             },
             {
@@ -3026,6 +3233,9 @@ function Syncest:addToMainMenu(menu_items)
                     }
                     if SyncSilverfish.installed() then
                         table.insert(definitions, 5, { _("Silverfish"), "silverfish_notifications" })
+                    end
+                    if SyncXray.installed() then
+                        table.insert(definitions, #definitions - 1, { _("X-Ray"), "xray_notifications" })
                     end
                     local notification_items = {}
                     for _, definition in ipairs(definitions) do
@@ -3180,6 +3390,28 @@ function Syncest:addToMainMenu(menu_items)
                         text = _("Pull Silverfish now"),
                         enabled_func = function() return configured end,
                         callback = function() self:pullSilverfish(true, true) end,
+                        separator = true,
+                    })
+                    break
+                end
+            end
+        end
+
+        -- X-Ray push/pull now for the open book, after the vocab (and Silverfish) ones
+        if SyncXray.installed() and self.ui and self.ui.document then
+            local anchor = SyncSilverfish.installed() and _("Pull Silverfish now") or _("Pull vocab now")
+            for i, item in ipairs(items) do
+                if item.text == anchor then
+                    item.separator = nil
+                    table.insert(items, i + 1, {
+                        text = _("Push X-Ray now"),
+                        enabled_func = function() return configured end,
+                        callback = function() self:pushXray(true, true) end,
+                    })
+                    table.insert(items, i + 2, {
+                        text = _("Pull X-Ray now"),
+                        enabled_func = function() return configured end,
+                        callback = function() self:pullXray(true, true) end,
                         separator = true,
                     })
                     break
@@ -3826,6 +4058,7 @@ function Syncest:pushAll(interactive)
             self:pushBookConfigAsync(
                 true, interactive and "manual" or "auto", "push_all")
             self:pushBookNotes(false, true, true)
+            self:pushXray(true)
         end
         self:pushBookStats(false, true, interactive == true)
         self:pushVocab(false, true)
@@ -3840,6 +4073,7 @@ function Syncest:pullAll(interactive)
         if in_book then
             self:pullBookConfigAsync(true, true)
             self:pullBookNotes(false, false, true)
+            self:pullXray(true)
         end
         self:pullBookStats(false, true, interactive == true)
         self:pullVocab(false, true)
@@ -4346,6 +4580,12 @@ end
 function Syncest:onSyncestPullVocab()
     self:_runSafely("manual pull vocab", function() self:pullVocab(false, true) end, true)
 end
+function Syncest:onSyncestPushXray()
+    self:_runSafely("manual push xray", function() self:pushXray(true, true) end, true)
+end
+function Syncest:onSyncestPullXray()
+    self:_runSafely("manual pull xray", function() self:pullXray(true, true) end, true)
+end
 function Syncest:onSyncestPushSilverfish()
     self:_runSafely("manual push silverfish", function() self:pushSilverfish(true, true) end, true)
 end
@@ -4414,6 +4654,7 @@ function Syncest:onCloseDocument()
     })
     -- after Silverfish has counted the last page and saved (its own onCloseDocument)
     self:_scheduleSilverfishPush(2)
+    self:_runSafely("auto push xray", function() self:_pushXrayOnClose() end)
 end
 
 function Syncest:onSuspend()

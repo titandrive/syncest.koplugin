@@ -13,6 +13,7 @@ Syncest was made primarily to be used alongside [Obsidian MoonSync](https://gith
 - Sync KOReader reading statistics.
 - Sync vocabulary builder entries.
 - Sync the Silverfish reading pet between devices (when the Silverfish plugin is installed).
+- Sync each book's X-Ray analysis between devices, so a book is only processed once (when the X-Ray plugin is installed).
 - Maintain a Syncest book library with optional book and cover upload/download.
 - Browse the authoritative cloud catalog in grid or list view, with filters for
   cloud-only books and cloud books already present on the current device.
@@ -28,6 +29,7 @@ Syncest was made primarily to be used alongside [Obsidian MoonSync](https://gith
   - Pull progress and annotations on book open, with an optional stats pull.
   - Pull stats and vocab on app open.
   - Push the Silverfish pet on book close and sleep; pull it on app open and wake.
+  - Pull a book's X-Ray analysis on book open; push it on book close when it changed.
 - Background update checks with in-plugin install prompts.
 
 ## Installation
@@ -54,7 +56,7 @@ This works well with self-hosted storage such as Nextcloud, a WebDAV server expo
 
 ## Notifications
 
-Open `Syncest` -> `Notifications` to enable or disable status notifications for progress, annotations, statistics, vocabulary, Silverfish (when installed), books and library operations, and connection changes. All notification types are enabled by default.
+Open `Syncest` -> `Notifications` to enable or disable status notifications for progress, annotations, statistics, vocabulary, Silverfish and X-Ray (when installed), books and library operations, and connection changes. All notification types are enabled by default.
 
 These controls suppress routine status notifications. Required confirmations and actionable error dialogs remain visible.
 
@@ -71,6 +73,7 @@ sync/
   <book-hash>/
     progress.json
     annotations.json
+    xray.json
     _<Book Title>.json
 books/
   <book-hash>/
@@ -92,6 +95,8 @@ The `<book-hash>` folder names are stable machine identifiers. The `_<Book Title
 `vocab.json` stores vocabulary builder entries.
 
 `silverfish.json` stores the Silverfish pet (only when the Silverfish plugin is installed). The pet is one evolving state, so it is not merged field by field: the most-fed copy wins. A later generation beats an earlier one, then more letters eaten; between two different pets with equal progress the older pet wins, so a fresh egg on a new device never replaces an existing pet. A push that finds a more-fed pet on the server adopts that pet instead of overwriting it. The state is stored in Silverfish's own Lua serialization inside the JSON so it round-trips exactly.
+
+`xray.json` stores a book's X-Ray analysis (only when the X-Ray plugin is installed): the characters, locations, terms, timeline and author information X-Ray worked out, from its `xray_cache.lua` in the book's sidecar folder. The copy analysed furthest into the book wins, then the one that found more; a less-analysed copy never replaces a more-analysed one, and an empty placeholder is never pushed. X-Ray records page numbers (how far it analysed, and where each note starts, which it uses to avoid spoilers), and pages differ between devices, so each page number travels with the position in the book's text where that page starts and is turned back into the receiving device's own page number. A pulled analysis is applied to the running X-Ray, which reloads it at once; it is never written while X-Ray is in the middle of analysing. X-Ray's local text scan (`xray_entity_cache.cache`) is not synced: each device rebuilds it on its own without AI.
 
 `library.json` stores the Syncest book catalog: hashes, titles, authors, formats, reading status, timestamps, and metadata used by the Syncest Library view.
 
@@ -120,6 +125,7 @@ Global pulls happen when KOReader/Syncest starts:
 - Pull stats on app open.
 - Pull vocab on app open.
 - Pull the Silverfish pet on app open and on wake (at most every two minutes).
+- Pull the open book's X-Ray analysis on book open, before X-Ray starts catching up on its own.
 
 Pushes happen when data changes or when a book closes:
 
@@ -133,7 +139,8 @@ Pushes happen when data changes or when a book closes:
 - Push stats on book close.
 - Optionally push stats on app suspend.
 - Push vocab on word lookup.
-- Push the Silverfish pet on book close and on suspend.
+- Push the Silverfish pet when it changes.
+- Push the book's X-Ray analysis on book close, when X-Ray changed it.
 
 ## Manual Sync
 
@@ -141,6 +148,7 @@ When a book is open, Syncest shows manual commands for that book:
 
 - Push/pull reading progress.
 - Push/pull annotations.
+- Push/pull the X-Ray analysis (when X-Ray is installed).
 
 The main Syncest menu also includes:
 
@@ -148,7 +156,7 @@ The main Syncest menu also includes:
 - Push/pull vocab.
 - Push/pull Silverfish (when installed).
 - Push/pull the Syncest book library and book files.
-- Push all / Pull all for progress, annotations, stats, vocab, and Silverfish.
+- Push all / Pull all for progress, annotations, stats, vocab, Silverfish, and X-Ray.
 
 `Push all` and `Pull all` do not upload or download book files or the book catalog. Book library sync is kept separate on purpose.
 
@@ -163,6 +171,11 @@ The Library view menu keeps cloud-location filters in their own section. `Cloud 
 Manual and automatic stats pushes and pulls reconcile the complete statistics history, including older sessions uploaded late and duration updates to existing sessions. Imported books with a missing page count are repaired from their session data so KOReader's stats views include them.
 
 ## Changelog
+
+### 1.2.16
+
+- Sync each book's X-Ray analysis between devices when the X-Ray plugin is installed, so a book only has to be processed once. The analysis is pulled on book open and pushed on book close when it changed; the furthest analysis wins and a less-analysed copy never replaces a more-analysed one. Page numbers are carried as positions in the book's text, so X-Ray's spoiler protection matches each device's own pages.
+- Manual Push/Pull X-Ray in the book menu and as gestures, X-Ray in Push all/Pull all, sync-setting toggles, and a notification toggle. All of it is hidden when X-Ray is not installed.
 
 ### 1.2.15
 

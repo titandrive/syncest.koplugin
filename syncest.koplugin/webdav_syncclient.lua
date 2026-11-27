@@ -733,6 +733,14 @@ function WebDavSyncClient:pullChanges(params, callback)
         end
         callback(true, data, 200)
 
+    elseif t == "xray" then
+        local data, read_status = self:_readJSON("sync/" .. book .. "/xray.json")
+        if read_status == READ_FAILED then
+            callback(false, {}, "read_failed")
+            return
+        end
+        callback(true, data, 200)
+
     else
         callback(false, nil, 400)
     end
@@ -1002,6 +1010,27 @@ function WebDavSyncClient:pushChanges(changes, callback)
                 response.silverfish_remote = remote
             elseif not self:_writeJSON("silverfish.json", changes.silverfish) then
                 ok = false
+            end
+        end
+    end
+
+    -- X-Ray analysis of one book — the furthest analysis wins; a better remote copy is handed back to adopt
+    if changes.xray and changes.xray.book_hash and changes.xray.snapshot then
+        local path = "sync/" .. changes.xray.book_hash .. "/xray.json"
+        local remote, read_status = self:_readJSON(path)
+        if remote == nil and read_status ~= READ_MISSING then
+            ok = false
+        else
+            local SyncXray = require("syncest_syncxray")
+            if remote and remote.format == changes.xray.snapshot.format
+                    and SyncXray.better(remote.summary, changes.xray.snapshot.summary) then
+                response.xray_remote = remote
+            elseif not self:_writeJSON(path, changes.xray.snapshot) then
+                -- a book never synced before has no folder yet
+                if not (self:_ensureFolder("sync") and self:_ensureFolder("sync/" .. changes.xray.book_hash)
+                        and self:_writeJSON(path, changes.xray.snapshot)) then
+                    ok = false
+                end
             end
         end
     end
